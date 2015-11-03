@@ -1,6 +1,6 @@
 // Copyright (C) Tao Ma(tao.ma.1984@gmail.com)
 
-package lrpc
+package rpc
 
 import (
 	"github.com/golang/protobuf/proto"
@@ -11,7 +11,7 @@ import (
 
 var recv_id int32
 
-func (r *ResourceReq) Dispatch() {
+func (r *ResourceReq) Dispatch(v interface{}) {
 	if r.GetPayloadId() != 10000 {
 	}
 	recv_id = 10086
@@ -24,7 +24,7 @@ func TestMockMsg(t *testing.T) {
 	pf := NewProtobufFactory()
 
 	w := NewWriter(pw, hf, pf)
-	r := NewReader(pr, hf, pf)
+	r := NewReader(pr, hf, pf, nil)
 
 	w.Run()
 	r.Run()

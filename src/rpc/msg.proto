@@ -1,4 +1,4 @@
-package lrpc;
+package rpc;
 
 message ResourceReq {
 	required int32 id = 1;

@@ -1,7 +1,7 @@
 #! /bin/sh
 # Copyright (C) Tao Ma(tao.ma.1984@gmail.com)
 
-pkgname=lrpc
+pkgname=rpc
 outfile=pbpayload.go
 protofile=msg.proto
 
@@ -21,13 +21,13 @@ import (
 )
 
 const (
-    _ = iota
+	_ = iota
 EOF
 
 # Output the msg id
 for n in $names
 do
-	echo "    ${n}Id" >> "$outfile"
+	echo "\t${n}Id" >> "$outfile"
 done
 
 cat >>"$outfile" <<EOF
@@ -36,26 +36,26 @@ cat >>"$outfile" <<EOF
 type protobufFactory struct{}
 
 func NewProtobufFactory() PayloadFactory {
-    pf := new(protobufFactory)
+	pf := new(protobufFactory)
 	return PayloadFactory(pf)
 }
 
 func (pf *protobufFactory) New(id uint16) (p Payload) {
-    switch id {
+	switch id {
 EOF
 
 for n in $names
 do
 	cat >> "$outfile" << EOF
-    case ${n}Id:
-        p = New${n}()
+	case ${n}Id:
+		p = New${n}()
 EOF
 done
 
 cat >> "$outfile" << EOF
-    }
+	}
 
-    return p
+	return p
 }
 
 EOF

@@ -6,7 +6,7 @@
  *  ResponseRPC()
  *  AbortRPC()
  */
-package lrpc
+package rpc
 
 import (
 	"time"
@@ -21,6 +21,12 @@ type RpcResponse interface {
 	RpcGetId() uint32
 }
 
+type call struct {
+	id   uint32
+	req  RpcRequest
+	resp RpcResponse
+}
+
 type Tracker struct {
 	running bool
 	quit    chan bool
@@ -31,10 +37,10 @@ type Tracker struct {
 	id   chan uint32
 
 	timeout uint32
-	init    chan uint32
-	done    chan uint32
+	init    chan RpcRequest
+	done    chan RpcResponse
 
-	rpcs map[uint32]uint32
+	rpcs map[uint32]*call
 }
 
 func NewRPCTracker(n uint32) *Tracker {
@@ -50,9 +56,9 @@ func NewRPCTracker(n uint32) *Tracker {
 	t.next = 1
 	t.id = make(chan uint32, t.n)
 
-	t.init = make(chan uint32)
-	t.done = make(chan uint32)
-	t.rpcs = make(map[uint32]uint32)
+	t.init = make(chan RpcRequest)
+	t.done = make(chan RpcResponse)
+	t.rpcs = make(map[uint32]*call)
 
 	return t
 }
@@ -84,7 +90,7 @@ func (t *Tracker) RequestRPC(v interface{}) {
 	case id := <-t.id:
 		r.RpcSetId(id)
 		select {
-		case t.init <- id:
+		case t.init <- r:
 		case <-time.Tick(time.Second):
 			return
 		}
@@ -101,7 +107,7 @@ func (t *Tracker) ResponseRPC(v interface{}) {
 		// do something
 	} else {
 		select {
-		case t.done <- r.RpcGetId():
+		case t.done <- r:
 		case <-time.Tick(time.Second):
 			// TODO timeout?
 		}
@@ -113,7 +119,7 @@ func (t *Tracker) AbortRPC(v interface{}) {
 		// do something
 	} else {
 		select {
-		case t.done <- r.RpcGetId():
+		case t.done <- r:
 		case <-time.Tick(time.Second):
 			// TODO timeout?
 		}
@@ -133,15 +139,19 @@ forever:
 		select {
 		case <-t.quit:
 			break forever
-		case id := <-t.init:
-			if _, exist := t.rpcs[id]; exist {
+		case r := <-t.init:
+			if _, exist := t.rpcs[r.RpcGetId()]; exist {
 				// TODO: add multiple times?
 			} else {
-				t.rpcs[id] = t.timeout
+				c := new(call)
+				c.id = r.RpcGetId()
+				c.req = r
+				t.rpcs[r.RpcGetId()] = c
 			}
-		case id := <-t.done:
-			if _, exist := t.rpcs[id]; exist {
-				delete(t.rpcs, id)
+		case r := <-t.done:
+			if c, exist := t.rpcs[r.RpcGetId()]; exist {
+				c.resp = r
+				delete(t.rpcs, r.RpcGetId())
 				select {
 				case t.id <- t.next:
 					t.next++

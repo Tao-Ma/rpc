@@ -1,6 +1,6 @@
 // Copyright (C) Tao Ma(tao.ma.1984@gmail.com)
 
-package lrpc
+package rpc
 
 import (
 	"io"
@@ -25,7 +25,7 @@ type Payload interface {
 }
 
 type ReaderDispatch interface {
-	Dispatch()
+	Dispatch(interface{})
 }
 
 type HeaderFactory interface {
@@ -140,9 +140,11 @@ type Reader struct {
 	hf     HeaderFactory
 	pf     PayloadFactory
 	maxlen uint32
+
+	ctx interface{}
 }
 
-func NewReader(conn io.Reader, hf HeaderFactory, pf PayloadFactory) *Reader {
+func NewReader(conn io.Reader, hf HeaderFactory, pf PayloadFactory, ctx interface{}) *Reader {
 	r := new(Reader)
 
 	r.quit = make(chan bool)
@@ -150,6 +152,8 @@ func NewReader(conn io.Reader, hf HeaderFactory, pf PayloadFactory) *Reader {
 	r.hf = hf
 	r.pf = pf
 	r.maxlen = 4096
+
+	r.ctx = ctx
 
 	return r
 }
@@ -224,7 +228,7 @@ func (r *Reader) read() error {
 	if d, ok := p.(ReaderDispatch); !ok {
 		return nil
 	} else {
-		d.Dispatch()
+		go d.Dispatch(r.ctx)
 	}
 	return nil
 }
