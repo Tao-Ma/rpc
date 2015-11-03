@@ -1,6 +1,6 @@
 // Copyright (C) Tao Ma(tao.ma.1984@gmail.com)
 
-package msg
+package lrpc
 
 import (
 	"github.com/golang/protobuf/proto"

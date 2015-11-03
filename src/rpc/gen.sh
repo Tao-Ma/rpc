@@ -3,9 +3,12 @@
 
 pkgname=lrpc
 outfile=pbpayload.go
+protofile=msg.proto
 
 echo "generate new protobuf file..."
-protoc --go_out=. msg.proto || exit $?
+protoc --go_out=. "$protofile"  || exit $?
+
+names=`grep message "$protofile" | awk '{print $2}'`
 
 # header
 cat >"$outfile" <<EOF
@@ -22,7 +25,7 @@ const (
 EOF
 
 # Output the msg id
-for n in names
+for n in $names
 do
 	echo "    ${n}Id" >> "$outfile"
 done
@@ -41,22 +44,23 @@ func (pf *protobufFactory) New(id uint16) (p Payload) {
     switch id {
 EOF
 
-for n in names
+for n in $names
 do
 	cat >> "$outfile" << EOF
-    case ${n}Id:" >> "$outfile
-        p = New${n}()" >> "$outfile
+    case ${n}Id:
+        p = New${n}()
 EOF
 done
 
-cat > "$outfile" << EOF
+cat >> "$outfile" << EOF
+    }
 
     return p
 }
 
 EOF
 
-for n in names
+for n in $names
 do
 	cat >>"$outfile" << EOF
 func New${n}() *${n} {

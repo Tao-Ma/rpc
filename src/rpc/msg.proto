@@ -1,0 +1,9 @@
+package lrpc;
+
+message ResourceReq {
+	required int32 id = 1;
+}
+
+message ResourceResp {
+	required int32 id = 1;
+}
