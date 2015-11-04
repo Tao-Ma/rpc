@@ -24,10 +24,6 @@ type Payload interface {
 	UnmarshalPayload([]byte) error
 }
 
-type ReaderDispatch interface {
-	Dispatch(interface{})
-}
-
 type HeaderFactory interface {
 	New() Header
 }
@@ -78,7 +74,7 @@ func (w *Writer) Stop() {
 	// TODO: cleanup
 }
 
-func (w *Writer) Write(p Payload) error {
+func (w *Writer) Process(p Payload) error {
 	var (
 		pb []byte
 		b  []byte
@@ -141,10 +137,10 @@ type Reader struct {
 	pf     PayloadFactory
 	maxlen uint32
 
-	ctx interface{}
+	p RpcProcessor
 }
 
-func NewReader(conn io.Reader, hf HeaderFactory, pf PayloadFactory, ctx interface{}) *Reader {
+func NewReader(conn io.Reader, hf HeaderFactory, pf PayloadFactory, p RpcProcessor) *Reader {
 	r := new(Reader)
 
 	r.quit = make(chan bool)
@@ -153,7 +149,7 @@ func NewReader(conn io.Reader, hf HeaderFactory, pf PayloadFactory, ctx interfac
 	r.pf = pf
 	r.maxlen = 4096
 
-	r.ctx = ctx
+	r.p = p
 
 	return r
 }
@@ -225,10 +221,6 @@ func (r *Reader) read() error {
 		return err
 	}
 
-	if d, ok := p.(ReaderDispatch); !ok {
-		return nil
-	} else {
-		go d.Dispatch(r.ctx)
-	}
+	go r.p.Process(p)
 	return nil
 }

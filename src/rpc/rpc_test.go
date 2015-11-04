@@ -3,6 +3,7 @@
 package rpc
 
 import (
+	"sync"
 	"testing"
 )
 
@@ -18,8 +19,17 @@ func (m *Msg) RpcGetId() uint32 {
 	return m.id
 }
 
+func (t *Tracker) Process(v interface{}) {
+	t.ResponseRPC(v)
+}
+
+func (t *Tracker) SetProcessor(p RpcProcessor) {
+	t.p = p
+}
+
 func TestRPC(t *testing.T) {
-	tracker := NewRPCTracker(2)
+	tracker := NewRPCTracker(1, nil)
+	tracker.SetProcessor(tracker)
 
 	tracker.Run()
 
@@ -27,17 +37,45 @@ func TestRPC(t *testing.T) {
 	m2 := new(Msg)
 
 	tracker.RequestRPC(m1)
-	t.Logf("m1:%v", m1)
 	tracker.RequestRPC(m2)
-	t.Logf("m2:%v", m2)
-
-	tracker.ResponseRPC(m2)
-	tracker.ResponseRPC(m1)
 
 	tracker.RequestRPC(m1)
-	if m1.id != 3 {
-		t.Fail()
-	}
 
 	tracker.Stop()
+}
+
+func BenchmarkTracker(b *testing.B) {
+	tracker := NewRPCTracker(10, nil)
+	tracker.SetProcessor(tracker)
+	tracker.Run()
+
+	b.RunParallel(func(pb *testing.PB) {
+		for pb.Next() {
+			m1 := new(Msg)
+			tracker.RequestRPC(m1)
+		}
+	})
+
+}
+
+func BenchmarkMutex(b *testing.B) {
+	b.RunParallel(func(pb *testing.PB) {
+		var m sync.Mutex
+		for pb.Next() {
+			m.Lock()
+			m.Unlock()
+		}
+	})
+}
+
+func BenchmarkChan(b *testing.B) {
+	b.RunParallel(func(pb *testing.PB) {
+		c := make(chan uint64, 100)
+		for pb.Next() {
+			select {
+			case c <- 1:
+			case <-c:
+			}
+		}
+	})
 }

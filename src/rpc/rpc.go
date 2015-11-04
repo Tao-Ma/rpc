@@ -14,11 +14,14 @@ import (
 
 type RpcRequest interface {
 	RpcSetId(uint32)
-	RpcResponse
 }
 
 type RpcResponse interface {
 	RpcGetId() uint32
+}
+
+type RpcProcessor interface {
+	Process(interface{})
 }
 
 type call struct {
@@ -34,16 +37,20 @@ type Tracker struct {
 
 	n    uint32
 	next uint32
-	id   chan uint32
 
 	timeout uint32
 	init    chan RpcRequest
 	done    chan RpcResponse
 
 	rpcs map[uint32]*call
+
+	p RpcProcessor
+
+	req_timeout time.Duration
+	srv_timeout time.Duration
 }
 
-func NewRPCTracker(n uint32) *Tracker {
+func NewRPCTracker(n uint32, p RpcProcessor) *Tracker {
 	t := new(Tracker)
 
 	t.quit = make(chan bool)
@@ -54,11 +61,15 @@ func NewRPCTracker(n uint32) *Tracker {
 
 	t.n = n
 	t.next = 1
-	t.id = make(chan uint32, t.n)
 
-	t.init = make(chan RpcRequest)
-	t.done = make(chan RpcResponse)
+	t.init = make(chan RpcRequest, t.n)
+	t.done = make(chan RpcResponse, t.n)
 	t.rpcs = make(map[uint32]*call)
+
+	t.p = p
+
+	t.req_timeout = 0 * time.Second
+	t.srv_timeout = 0 * time.Second
 
 	return t
 }
@@ -87,14 +98,8 @@ func (t *Tracker) RequestRPC(v interface{}) {
 	}
 
 	select {
-	case id := <-t.id:
-		r.RpcSetId(id)
-		select {
-		case t.init <- r:
-		case <-time.Tick(time.Second):
-			return
-		}
-	case <-time.Tick(time.Second):
+	case t.init <- r:
+	case <-time.Tick(t.req_timeout):
 		// TODO: tell the caller prepare failed(timeout).
 		return
 	}
@@ -108,60 +113,40 @@ func (t *Tracker) ResponseRPC(v interface{}) {
 	} else {
 		select {
 		case t.done <- r:
-		case <-time.Tick(time.Second):
-			// TODO timeout?
-		}
-	}
-}
-
-func (t *Tracker) AbortRPC(v interface{}) {
-	if r, ok := v.(RpcRequest); !ok {
-		// do something
-	} else {
-		select {
-		case t.done <- r:
-		case <-time.Tick(time.Second):
+		case <-time.Tick(t.req_timeout):
 			// TODO timeout?
 		}
 	}
 }
 
 func (t *Tracker) loop() {
-	for i := uint32(0); i < t.n; i++ {
-		select {
-		case t.id <- t.next:
-			t.next++
-		}
-	}
-
 forever:
 	for {
 		select {
 		case <-t.quit:
 			break forever
 		case r := <-t.init:
-			if _, exist := t.rpcs[r.RpcGetId()]; exist {
-				// TODO: add multiple times?
+			id := t.next
+			t.next++
+			r.RpcSetId(id)
+			if _, exist := t.rpcs[id]; exist {
+				panic("")
 			} else {
 				c := new(call)
-				c.id = r.RpcGetId()
+				c.id = id
 				c.req = r
-				t.rpcs[r.RpcGetId()] = c
+				t.rpcs[c.id] = c
+				go t.p.Process(r)
 			}
 		case r := <-t.done:
 			if c, exist := t.rpcs[r.RpcGetId()]; exist {
 				c.resp = r
-				delete(t.rpcs, r.RpcGetId())
-				select {
-				case t.id <- t.next:
-					t.next++
-				default:
-					// TODO: should not happen?
-				}
+				delete(t.rpcs, c.id)
+				//go something(r.req, r.resp)
 			} else {
 				// TODO: timeout or unexpected(invalid?)
 			}
-		case <-time.Tick(time.Second):
+		case <-time.Tick(t.srv_timeout):
 			// need a data structure to maintain recently timeout rpc
 		}
 	}

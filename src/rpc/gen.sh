@@ -3,12 +3,13 @@
 
 pkgname=rpc
 outfile=pbpayload.go
+outpath=.
 protofile=msg.proto
 
 echo "generate new protobuf file..."
-protoc --go_out=. "$protofile"  || exit $?
+protoc --go_out="$outpath" "$protofile"  || exit $?
 
-names=`grep message "$protofile" | awk '{print $2}'`
+names=`grep message "$protofile" | awk '{print $2}' | grep -E -v '^[[:blank:]]*$'`
 
 # header
 cat >"$outfile" <<EOF

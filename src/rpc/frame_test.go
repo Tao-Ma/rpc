@@ -11,9 +11,9 @@ import (
 
 var recv_id int32
 
-func (r *ResourceReq) Dispatch(v interface{}) {
-	if r.GetPayloadId() != 10000 {
-	}
+type FakeProcessor struct{}
+
+func (p *FakeProcessor) Process(v interface{}) {
 	recv_id = 10086
 }
 
@@ -24,14 +24,14 @@ func TestMockMsg(t *testing.T) {
 	pf := NewProtobufFactory()
 
 	w := NewWriter(pw, hf, pf)
-	r := NewReader(pr, hf, pf, nil)
+	r := NewReader(pr, hf, pf, &FakeProcessor{})
 
 	w.Run()
 	r.Run()
 
 	req := NewResourceReq()
 	req.Id = proto.Int32(10000)
-	w.Write(req)
+	w.Process(req)
 	select {
 	case <-time.Tick(time.Second):
 	}
