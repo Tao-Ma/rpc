@@ -20,8 +20,13 @@ type RpcResponse interface {
 	RpcGetId() uint32
 }
 
-type RpcProcessor interface {
-	Process(interface{})
+type Router interface {
+	RpcRequestRoute(RpcRequest)
+	RpcResponseRoute(RpcResponse, RpcRequest)
+
+	DefaultRoute(interface{})
+
+	ErrorRoute(interface{}, string)
 }
 
 type call struct {
@@ -44,18 +49,18 @@ type Tracker struct {
 
 	rpcs map[uint32]*call
 
-	p RpcProcessor
+	r Router
 
 	req_timeout time.Duration
 	srv_timeout time.Duration
 }
 
-func NewRPCTracker(n uint32, p RpcProcessor) *Tracker {
+func NewRPCTracker(n uint32, r Router) *Tracker {
 	t := new(Tracker)
 
 	t.quit = make(chan bool)
 
-	if n < 1 || n > 16384 {
+	if n < 0 || n > 16384 {
 		return nil
 	}
 
@@ -66,7 +71,7 @@ func NewRPCTracker(n uint32, p RpcProcessor) *Tracker {
 	t.done = make(chan RpcResponse, t.n)
 	t.rpcs = make(map[uint32]*call)
 
-	t.p = p
+	t.r = r
 
 	t.req_timeout = 1000 * time.Millisecond
 	t.srv_timeout = 000 * time.Millisecond
@@ -92,6 +97,7 @@ func (t *Tracker) RequestRPC(v interface{}) {
 	var r RpcRequest
 
 	if nr, ok := v.(RpcRequest); !ok {
+		t.r.DefaultRoute(v)
 		return
 	} else {
 		r = nr
@@ -113,7 +119,7 @@ func (t *Tracker) RequestRPC(v interface{}) {
 
 func (t *Tracker) ResponseRPC(v interface{}) {
 	if r, ok := v.(RpcResponse); !ok {
-		// do something
+		t.r.DefaultRoute(v)
 	} else {
 		select {
 		case t.done <- r:
@@ -144,15 +150,16 @@ forever:
 				c.id = id
 				c.req = r
 				t.rpcs[c.id] = c
-				go t.p.Process(r)
+				go t.r.RpcRequestRoute(r)
 			}
 		case r := <-t.done:
 			if c, exist := t.rpcs[r.RpcGetId()]; exist {
 				c.resp = r
 				delete(t.rpcs, c.id)
-				//go something(r.req, r.resp)
+				go t.r.RpcResponseRoute(c.resp, c.req)
 			} else {
-				// TODO: timeout or unexpected(invalid?)
+				// timeout or unexpected
+				go t.r.ErrorRoute(r, "timeout or feature response")
 			}
 		case <-time.Tick(t.srv_timeout):
 			// TODO: move this to a seperate goroutine, timer is hotspot

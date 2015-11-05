@@ -74,7 +74,7 @@ func (w *Writer) Stop() {
 	// TODO: cleanup
 }
 
-func (w *Writer) Process(p Payload) error {
+func (w *Writer) Write(p Payload) error {
 	var (
 		pb []byte
 		b  []byte
@@ -99,9 +99,13 @@ func (w *Writer) Process(p Payload) error {
 
 	select {
 	case w.out <- &b:
-	case <-time.Tick(time.Second):
-		// timeout case
-		return nil
+	default:
+		select {
+		case w.out <- &b:
+		case <-time.Tick(time.Second):
+			// timeout case
+			return nil
+		}
 	}
 
 	// TODO: block support
@@ -137,10 +141,10 @@ type Reader struct {
 	pf     PayloadFactory
 	maxlen uint32
 
-	p RpcProcessor
+	r Router
 }
 
-func NewReader(conn io.Reader, hf HeaderFactory, pf PayloadFactory, p RpcProcessor) *Reader {
+func NewReader(conn io.Reader, hf HeaderFactory, pf PayloadFactory, router Router) *Reader {
 	r := new(Reader)
 
 	r.quit = make(chan bool)
@@ -149,7 +153,7 @@ func NewReader(conn io.Reader, hf HeaderFactory, pf PayloadFactory, p RpcProcess
 	r.pf = pf
 	r.maxlen = 4096
 
-	r.p = p
+	r.r = router
 
 	return r
 }
@@ -221,6 +225,14 @@ func (r *Reader) read() error {
 		return err
 	}
 
-	go r.p.Process(p)
+	switch v := p.(type) {
+	case RpcRequest:
+		r.r.RpcRequestRoute(v)
+	case RpcResponse:
+		r.r.RpcResponseRoute(v, nil)
+	default:
+		r.r.DefaultRoute(p)
+	}
+
 	return nil
 }

@@ -11,10 +11,21 @@ import (
 
 var recv_id int32
 
-type FakeProcessor struct{}
+type node struct {
+	T *Tracker
+}
 
-func (p *FakeProcessor) Process(v interface{}) {
+func (n *node) RpcRequestRoute(r RpcRequest) {
+}
+
+func (n *node) RpcResponseRoute(resp RpcResponse, req RpcRequest) {
+}
+
+func (n *node) DefaultRoute(v interface{}) {
 	recv_id = 10086
+}
+
+func (n *node) ErrorRoute(v interface{}, text string) {
 }
 
 func TestMockMsg(t *testing.T) {
@@ -22,16 +33,17 @@ func TestMockMsg(t *testing.T) {
 
 	hf := NewDefaultHeaderFactory()
 	pf := NewProtobufFactory()
+	n := new(node)
 
 	w := NewWriter(pw, hf, pf)
-	r := NewReader(pr, hf, pf, &FakeProcessor{})
+	r := NewReader(pr, hf, pf, n)
 
 	w.Run()
 	r.Run()
 
 	req := NewResourceReq()
 	req.Id = proto.Int32(10000)
-	w.Process(req)
+	w.Write(req)
 	select {
 	case <-time.Tick(time.Second):
 	}
