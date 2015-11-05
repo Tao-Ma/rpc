@@ -55,7 +55,7 @@ func NewRPCTracker(n uint32, p RpcProcessor) *Tracker {
 
 	t.quit = make(chan bool)
 
-	if n < 1 || n > 4096 {
+	if n < 1 || n > 16384 {
 		return nil
 	}
 
@@ -68,8 +68,8 @@ func NewRPCTracker(n uint32, p RpcProcessor) *Tracker {
 
 	t.p = p
 
-	t.req_timeout = 0 * time.Second
-	t.srv_timeout = 0 * time.Second
+	t.req_timeout = 1000 * time.Millisecond
+	t.srv_timeout = 000 * time.Millisecond
 
 	return t
 }
@@ -99,8 +99,12 @@ func (t *Tracker) RequestRPC(v interface{}) {
 
 	select {
 	case t.init <- r:
-	case <-time.Tick(t.req_timeout):
-		// TODO: tell the caller prepare failed(timeout).
+	default:
+		select {
+		case t.init <- r:
+		case <-time.Tick(t.req_timeout):
+			// TODO: tell the caller prepare failed(timeout).
+		}
 		return
 	}
 
@@ -113,8 +117,12 @@ func (t *Tracker) ResponseRPC(v interface{}) {
 	} else {
 		select {
 		case t.done <- r:
-		case <-time.Tick(t.req_timeout):
-			// TODO timeout?
+		default:
+			select {
+			case t.done <- r:
+			case <-time.Tick(t.req_timeout):
+				// TODO timeout?
+			}
 		}
 	}
 }
@@ -147,6 +155,8 @@ forever:
 				// TODO: timeout or unexpected(invalid?)
 			}
 		case <-time.Tick(t.srv_timeout):
+			// TODO: move this to a seperate goroutine, timer is hotspot
+			// if request is too much
 			// need a data structure to maintain recently timeout rpc
 		}
 	}

@@ -45,7 +45,10 @@ func TestRPC(t *testing.T) {
 }
 
 func BenchmarkTracker(b *testing.B) {
-	tracker := NewRPCTracker(10, nil)
+	var tracker *Tracker
+	if tracker = NewRPCTracker(16384, nil); tracker == nil {
+		b.FailNow()
+	}
 	tracker.SetProcessor(tracker)
 	tracker.Run()
 
