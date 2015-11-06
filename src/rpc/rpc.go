@@ -36,10 +36,7 @@ type call struct {
 }
 
 type Tracker struct {
-	running bool
-	quit    chan bool
-	err     error
-
+	bg   *BackgroudService
 	n    uint32
 	next uint32
 
@@ -58,10 +55,14 @@ type Tracker struct {
 func NewRPCTracker(n uint32, r Router) *Tracker {
 	t := new(Tracker)
 
-	t.quit = make(chan bool)
-
 	if n < 0 || n > 16384 {
 		return nil
+	}
+
+	if bg, err := NewBackgroundService(t); err != nil {
+		return nil
+	} else {
+		t.bg = bg
 	}
 
 	t.n = n
@@ -80,17 +81,11 @@ func NewRPCTracker(n uint32, r Router) *Tracker {
 }
 
 func (t *Tracker) Run() {
-	go t.loop()
+	t.bg.Run()
 }
 
 func (t *Tracker) Stop() {
-	if !t.running {
-		return
-	}
-
-	t.quit <- true
-	// cleanup?
-	t.running = false
+	t.bg.Stop()
 }
 
 func (t *Tracker) RequestRPC(v interface{}) {
@@ -133,11 +128,12 @@ func (t *Tracker) ResponseRPC(v interface{}) {
 	}
 }
 
-func (t *Tracker) loop() {
+func (t *Tracker) ServiceLoop(q chan bool, r chan bool) {
+	r <- true
 forever:
 	for {
 		select {
-		case <-t.quit:
+		case <-q:
 			break forever
 		case r := <-t.init:
 			id := t.next

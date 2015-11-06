@@ -32,14 +32,77 @@ type PayloadFactory interface {
 	New(id uint16) Payload
 }
 
-type Writer struct {
+type ServiceLoop interface {
+	ServiceLoop(chan bool, chan bool)
+}
+
+type BackgroudService struct {
 	running bool
-	quit    chan bool
 	err     error
+
+	quit  chan bool
+	ready chan bool
+
+	l ServiceLoop
+
+	start_timeout time.Duration
+	stop_timeout  time.Duration
+}
+
+func NewBackgroundService(l ServiceLoop) (*BackgroudService, error) {
+	bg := new(BackgroudService)
+
+	bg.l = l
+	bg.start_timeout = 3000 * time.Millisecond
+	bg.stop_timeout = 3000 * time.Millisecond
+
+	return bg, nil
+}
+
+func (bg *BackgroudService) Run() {
+	if bg.running {
+		return
+	}
+
+	bg.quit = make(chan bool, 1)
+	bg.ready = make(chan bool, 1)
+
+	go bg.l.ServiceLoop(bg.quit, bg.ready)
+
+	select {
+	case <-bg.ready:
+		bg.running = true
+	case <-time.Tick(bg.start_timeout):
+		close(bg.quit)
+		// TODO: bg.err
+		break
+	}
+
+	close(bg.ready)
+}
+
+func (bg *BackgroudService) Stop() {
+	if !bg.running {
+		return
+	}
+
+	select {
+	case bg.quit <- true:
+	case <-time.Tick(bg.stop_timeout):
+		// TODO: bg.err
+	}
+
+	close(bg.quit)
+	bg.running = false
+}
+
+type Writer struct {
+	bg *BackgroudService
 
 	conn io.Writer
 	hf   HeaderFactory
 	pf   PayloadFactory
+	err  error
 
 	out chan *[]byte
 }
@@ -47,7 +110,12 @@ type Writer struct {
 func NewWriter(conn io.Writer, hf HeaderFactory, pf PayloadFactory) *Writer {
 	w := new(Writer)
 
-	w.quit = make(chan bool)
+	if bg, err := NewBackgroundService(w); err != nil {
+		return nil
+	} else {
+		w.bg = bg
+	}
+
 	w.conn = conn
 	w.hf = hf
 	w.pf = pf
@@ -58,20 +126,11 @@ func NewWriter(conn io.Writer, hf HeaderFactory, pf PayloadFactory) *Writer {
 }
 
 func (w *Writer) Run() {
-	if w.running {
-		return
-	}
-	go w.loop()
+	w.bg.Run()
 }
 
 func (w *Writer) Stop() {
-	if !w.running {
-		return
-	}
-	w.running = false
-	w.quit <- true
-	close(w.quit)
-	// TODO: cleanup
+	w.bg.Stop()
 }
 
 func (w *Writer) Write(p Payload) error {
@@ -112,12 +171,13 @@ func (w *Writer) Write(p Payload) error {
 	return nil
 }
 
-func (w *Writer) loop() {
+func (w *Writer) ServiceLoop(q chan bool, r chan bool) {
+	r <- true
 forever:
 	for {
 		// forward msg from chan to conn
 		select {
-		case <-w.quit:
+		case <-q:
 			break forever
 		case b := <-w.out:
 			// TODO: timeout or error?
@@ -132,13 +192,12 @@ forever:
 }
 
 type Reader struct {
-	running bool
-	quit    chan bool
-	err     error
+	bg *BackgroudService
 
 	conn   io.Reader
 	hf     HeaderFactory
 	pf     PayloadFactory
+	err    error
 	maxlen uint32
 
 	r Router
@@ -147,7 +206,12 @@ type Reader struct {
 func NewReader(conn io.Reader, hf HeaderFactory, pf PayloadFactory, router Router) *Reader {
 	r := new(Reader)
 
-	r.quit = make(chan bool)
+	if bg, err := NewBackgroundService(r); err != nil {
+		return nil
+	} else {
+		r.bg = bg
+	}
+
 	r.conn = conn
 	r.hf = hf
 	r.pf = pf
@@ -159,23 +223,15 @@ func NewReader(conn io.Reader, hf HeaderFactory, pf PayloadFactory, router Route
 }
 
 func (r *Reader) Run() {
-	if r.running {
-		return
-	}
-	go r.loop()
+	r.bg.Run()
 }
 
 func (r *Reader) Stop() {
-	if !r.running {
-		return
-	}
-	r.running = false
-	r.quit <- true
-	close(r.quit)
-	// TODO: cleanup
+	r.bg.Stop()
 }
 
-func (r *Reader) loop() {
+func (r *Reader) ServiceLoop(q chan bool, ready chan bool) {
+	ready <- true
 forever:
 	for {
 		if err := r.read(); err != nil {
@@ -185,7 +241,7 @@ forever:
 		}
 
 		select {
-		case <-r.quit:
+		case <-q:
 			// TODO: cleanup
 			break forever
 		default:
