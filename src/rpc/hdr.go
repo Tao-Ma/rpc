@@ -1,4 +1,5 @@
-// Copyright (C) Tao Ma(tao.ma.1984@gmail.com)
+// Copyright (C) Tao Ma(tao.ma.1984@gmail.com), All rights reserved.
+// https://github.com/Tao-Ma/rpc/
 
 package rpc
 
@@ -52,8 +53,10 @@ func (h *DefaultHeader) GetPayloadLen() uint32 {
 	return h.length - h.GetLen()
 }
 
-func (h *DefaultHeader) Marshal() (b []byte, err error) {
-	b = make([]byte, h.GetLen())
+func (h *DefaultHeader) MarshalI(b []byte) error {
+	if uint32(len(b)) < h.GetLen() {
+		return nil
+	}
 
 	h.checksum = 0
 
@@ -86,6 +89,16 @@ func (h *DefaultHeader) Marshal() (b []byte, err error) {
 	b[off+2] = byte(h.checksum >> 8)
 	b[off+3] = byte(h.checksum)
 	off += 4
+
+	return nil
+}
+
+func (h *DefaultHeader) Marshal() (b []byte, err error) {
+	b = make([]byte, h.GetLen())
+
+	if err = h.MarshalI(b); err != nil {
+		return nil, err
+	}
 
 	return b, nil
 }

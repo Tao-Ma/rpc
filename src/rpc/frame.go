@@ -1,15 +1,19 @@
-// Copyright (C) Tao Ma(tao.ma.1984@gmail.com)
+// Copyright (C) Tao Ma(tao.ma.1984@gmail.com), All rights reserved.
+// https://github.com/Tao-Ma/rpc/
 
 package rpc
 
 import (
 	"io"
+	"log"
+	"os"
 	"time"
 )
 
 type Header interface {
 	GetLen() uint32
 	Marshal() ([]byte, error)
+	MarshalI([]byte) error
 	Unmarshal([]byte) error
 
 	SetPayloadId(uint16)
@@ -22,6 +26,10 @@ type Payload interface {
 	GetPayloadId() uint16
 	MarshalPayload() ([]byte, error)
 	UnmarshalPayload([]byte) error
+}
+
+type ReaderWrapper interface {
+	wrap(Payload) Payload
 }
 
 type HeaderFactory interface {
@@ -104,10 +112,16 @@ type Writer struct {
 	pf   PayloadFactory
 	err  error
 
-	out chan *[]byte
+	out chan Payload
+
+	hdr    Header
+	hdrlen uint32
+	buf    []byte
+
+	logger *log.Logger
 }
 
-func NewWriter(conn io.Writer, hf HeaderFactory, pf PayloadFactory) *Writer {
+func NewWriter(conn io.Writer, out chan Payload, hf HeaderFactory, pf PayloadFactory, logger *log.Logger) *Writer {
 	w := new(Writer)
 
 	if bg, err := NewBackgroundService(w); err != nil {
@@ -120,7 +134,17 @@ func NewWriter(conn io.Writer, hf HeaderFactory, pf PayloadFactory) *Writer {
 	w.hf = hf
 	w.pf = pf
 
-	w.out = make(chan *[]byte)
+	w.out = out
+
+	w.hdr = hf.New()
+	w.hdrlen = w.hdr.GetLen()
+	w.buf = make([]byte, w.hdrlen, w.hdrlen)
+
+	if logger == nil {
+		w.logger = log.New(os.Stderr, "", log.LstdFlags)
+	} else {
+		w.logger = logger
+	}
 
 	return w
 }
@@ -134,41 +158,36 @@ func (w *Writer) Stop() {
 }
 
 func (w *Writer) Write(p Payload) error {
-	var (
-		pb []byte
-		b  []byte
-	)
-
-	if b, err := p.MarshalPayload(); err != nil {
-		return err
-	} else {
-		pb = b
-	}
-
-	hdr := w.hf.New()
-	hdr.SetPayloadId(p.GetPayloadId())
-	hdr.SetPayloadLen(uint32(len(pb)))
-	if hb, err := hdr.Marshal(); err != nil {
-		return err
-	} else {
-		b = append(hb, pb...)
-		hb = nil
-		pb = nil
-	}
-
 	select {
-	case w.out <- &b:
+	case w.out <- p:
 	default:
 		select {
-		case w.out <- &b:
-		case <-time.Tick(time.Second):
-			// timeout case
+		case w.out <- p:
+		case <-time.Tick(0 * time.Second):
+			// TODO: timeout
 			return nil
 		}
 	}
 
-	// TODO: block support
 	return nil
+}
+
+func (w *Writer) write(p Payload) ([]byte, error) {
+	pb, err := p.MarshalPayload()
+	if err != nil {
+		return nil, err
+	}
+
+	w.hdr.SetPayloadId(p.GetPayloadId())
+	w.hdr.SetPayloadLen(uint32(len(pb)))
+
+	if err := w.hdr.MarshalI(w.buf); err != nil {
+		return nil, err
+	}
+
+	b := append(w.buf, pb...)
+
+	return b, nil
 }
 
 func (w *Writer) ServiceLoop(q chan bool, r chan bool) {
@@ -179,14 +198,15 @@ forever:
 		select {
 		case <-q:
 			break forever
-		case b := <-w.out:
+		case p := <-w.out:
 			// TODO: timeout or error?
-			if _, err := w.conn.Write(*b); err != nil {
+			if b, err := w.write(p); err != nil {
+				// TODO: error?
+			} else if _, err := w.conn.Write(b); err != nil {
 				w.err = err
 				// TODO: stop the writer?
 				break forever
 			}
-			break
 		}
 	}
 }
@@ -194,17 +214,29 @@ forever:
 type Reader struct {
 	bg *BackgroudService
 
-	conn   io.Reader
-	hf     HeaderFactory
-	pf     PayloadFactory
-	err    error
-	maxlen uint32
+	conn io.Reader
+	hf   HeaderFactory
+	pf   PayloadFactory
+	err  error
 
-	r Router
+	maxlen  uint32
+	in      chan Payload
+	wrapper ReaderWrapper
+
+	// Speedup the read memory
+	hdr    Header
+	hdrlen uint32
+	buf    []byte
+
+	logger *log.Logger
 }
 
-func NewReader(conn io.Reader, hf HeaderFactory, pf PayloadFactory, router Router) *Reader {
+func NewReader(conn io.Reader, in chan Payload, wrapper ReaderWrapper, hf HeaderFactory, pf PayloadFactory, logger *log.Logger) *Reader {
 	r := new(Reader)
+
+	if wrapper == nil {
+		return nil
+	}
 
 	if bg, err := NewBackgroundService(r); err != nil {
 		return nil
@@ -217,7 +249,18 @@ func NewReader(conn io.Reader, hf HeaderFactory, pf PayloadFactory, router Route
 	r.pf = pf
 	r.maxlen = 4096
 
-	r.r = router
+	r.in = in
+	r.wrapper = wrapper
+
+	r.hdr = r.hf.New()
+	r.hdrlen = r.hdr.GetLen()
+	r.buf = make([]byte, r.hdrlen, r.maxlen+r.hdrlen)
+
+	if logger == nil {
+		r.logger = log.New(os.Stderr, "", log.LstdFlags)
+	} else {
+		r.logger = logger
+	}
 
 	return r
 }
@@ -234,61 +277,48 @@ func (r *Reader) ServiceLoop(q chan bool, ready chan bool) {
 	ready <- true
 forever:
 	for {
-		if err := r.read(); err != nil {
+		if p, err := r.read(); err != nil {
 			// TODO: timeout or error?
 			r.err = err
 			break forever
-		}
-
-		select {
-		case <-q:
-			// TODO: cleanup
-			break forever
-		default:
+		} else {
+			select {
+			case r.in <- r.wrapper.wrap(p):
+			case <-q:
+				// TODO: cleanup
+				break forever
+			}
 		}
 	}
 }
 
 //Try to read a whole msg.
-func (r *Reader) read() error {
-	hdr := r.hf.New()
-
+func (r *Reader) read() (Payload, error) {
+	hb := r.buf[:r.hdrlen]
 	// TODO: Read() interrupt?
-	b := make([]byte, hdr.GetLen(), r.maxlen+hdr.GetLen())
-	if _, err := r.conn.Read(b); err != nil {
-		b = nil
-		return err
+	if _, err := r.conn.Read(hb); err != nil {
+		return nil, err
 	}
 
-	if err := hdr.Unmarshal(b); err != nil {
-		b = nil
-		return err
+	if err := r.hdr.Unmarshal(hb); err != nil {
+		return nil, err
 	}
 
-	plen := hdr.GetPayloadLen()
+	plen := r.hdr.GetPayloadLen()
+	pb := r.buf[r.hdrlen : r.hdrlen+plen]
 	// Support header-only message(udp or no payload at all).
 	if plen > 0 {
 		// TODO: enlarge b []byte if plen > r.maxlen or error out.
-		if n, err := r.conn.Read(b[hdr.GetLen() : hdr.GetLen()+plen]); err != nil {
-			b = nil
-			return err
+		if n, err := r.conn.Read(pb); err != nil {
+			return nil, err
 		} else if uint32(n) != plen {
 		}
 	}
 
-	p := r.pf.New(hdr.GetPayloadId())
-	if err := p.UnmarshalPayload(b[hdr.GetLen() : hdr.GetLen()+plen]); err != nil {
-		return err
+	p := r.pf.New(r.hdr.GetPayloadId())
+	if err := p.UnmarshalPayload(pb); err != nil {
+		return nil, err
 	}
 
-	switch v := p.(type) {
-	case RpcRequest:
-		r.r.RpcRequestRoute(v)
-	case RpcResponse:
-		r.r.RpcResponseRoute(v, nil)
-	default:
-		r.r.DefaultRoute(p)
-	}
-
-	return nil
+	return p, nil
 }
