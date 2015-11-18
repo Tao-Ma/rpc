@@ -10,22 +10,8 @@ import (
 	"time"
 )
 
-type Header interface {
-	GetLen() uint32
-	Marshal() ([]byte, error)
-	MarshalI([]byte) error
-	Unmarshal([]byte) error
-
-	SetPayloadId(uint16)
-	GetPayloadId() uint16
-	SetPayloadLen(uint32)
-	GetPayloadLen() uint32
-}
-
 type Payload interface {
 	GetPayloadId() uint16
-	MarshalPayload() ([]byte, error)
-	UnmarshalPayload([]byte) error
 }
 
 type ReaderWrapper interface {
@@ -33,11 +19,30 @@ type ReaderWrapper interface {
 }
 
 type HeaderFactory interface {
-	New() Header
+	NewBufferFactory() HeaderBufferFactory
+}
+
+type HeaderBufferFactory interface {
+	Marshal([]byte) error
+	Unmarshal([]byte) error
+
+	GetHdrLen() uint32
+
+	SetPayloadId(uint16)
+	GetPayloadId() uint16
+	SetPayloadLen(uint32)
+	GetPayloadLen() uint32
+}
+
+type PayloadBufferFactory interface {
+	New(uint16) Payload
+
+	Marshal(Payload, []byte) ([]byte, error)
+	Unmarshal(uint16, []byte) (Payload, error)
 }
 
 type PayloadFactory interface {
-	New(id uint16) Payload
+	NewBufferFactory() PayloadBufferFactory
 }
 
 type ServiceLoop interface {
@@ -94,6 +99,8 @@ func (bg *BackgroudService) Stop() {
 		return
 	}
 
+	bg.running = false
+
 	select {
 	case bg.quit <- true:
 	case <-time.Tick(bg.stop_timeout):
@@ -101,22 +108,20 @@ func (bg *BackgroudService) Stop() {
 	}
 
 	close(bg.quit)
-	bg.running = false
 }
 
 type Writer struct {
 	bg *BackgroudService
 
 	conn io.Writer
-	hf   HeaderFactory
-	pf   PayloadFactory
+	hbf  HeaderBufferFactory
+	pbf  PayloadBufferFactory
 	err  error
 
 	out chan Payload
 
-	hdr    Header
-	hdrlen uint32
-	buf    []byte
+	maxlen uint32
+	b      []byte
 
 	logger *log.Logger
 }
@@ -131,14 +136,13 @@ func NewWriter(conn io.Writer, out chan Payload, hf HeaderFactory, pf PayloadFac
 	}
 
 	w.conn = conn
-	w.hf = hf
-	w.pf = pf
+	w.hbf = hf.NewBufferFactory()
+	w.pbf = pf.NewBufferFactory()
 
 	w.out = out
 
-	w.hdr = hf.New()
-	w.hdrlen = w.hdr.GetLen()
-	w.buf = make([]byte, w.hdrlen, w.hdrlen)
+	w.maxlen = 4096
+	w.b = make([]byte, w.hbf.GetHdrLen()+w.maxlen)
 
 	if logger == nil {
 		w.logger = log.New(os.Stderr, "", log.LstdFlags)
@@ -173,19 +177,20 @@ func (w *Writer) Write(p Payload) error {
 }
 
 func (w *Writer) write(p Payload) ([]byte, error) {
-	pb, err := p.MarshalPayload()
+	pb, err := w.pbf.Marshal(p, w.b[w.hbf.GetHdrLen():w.hbf.GetHdrLen()])
 	if err != nil {
 		return nil, err
 	}
 
-	w.hdr.SetPayloadId(p.GetPayloadId())
-	w.hdr.SetPayloadLen(uint32(len(pb)))
+	w.hbf.SetPayloadId(p.GetPayloadId())
+	w.hbf.SetPayloadLen(uint32(len(pb)))
 
-	if err := w.hdr.MarshalI(w.buf); err != nil {
+	hb := w.b[0:w.hbf.GetHdrLen()]
+	if err := w.hbf.Marshal(hb); err != nil {
 		return nil, err
 	}
 
-	b := append(w.buf, pb...)
+	b := append(hb, pb...)
 
 	return b, nil
 }
@@ -215,18 +220,15 @@ type Reader struct {
 	bg *BackgroudService
 
 	conn io.Reader
-	hf   HeaderFactory
-	pf   PayloadFactory
+	hbf  HeaderBufferFactory
+	pbf  PayloadBufferFactory
 	err  error
 
-	maxlen  uint32
 	in      chan Payload
 	wrapper ReaderWrapper
 
-	// Speedup the read memory
-	hdr    Header
-	hdrlen uint32
-	buf    []byte
+	maxlen uint32
+	b      []byte
 
 	logger *log.Logger
 }
@@ -245,16 +247,14 @@ func NewReader(conn io.Reader, in chan Payload, wrapper ReaderWrapper, hf Header
 	}
 
 	r.conn = conn
-	r.hf = hf
-	r.pf = pf
+	r.hbf = hf.NewBufferFactory()
+	r.pbf = pf.NewBufferFactory()
 	r.maxlen = 4096
 
 	r.in = in
 	r.wrapper = wrapper
 
-	r.hdr = r.hf.New()
-	r.hdrlen = r.hdr.GetLen()
-	r.buf = make([]byte, r.hdrlen, r.maxlen+r.hdrlen)
+	r.b = make([]byte, r.maxlen+r.hbf.GetHdrLen())
 
 	if logger == nil {
 		r.logger = log.New(os.Stderr, "", log.LstdFlags)
@@ -294,29 +294,30 @@ forever:
 
 //Try to read a whole msg.
 func (r *Reader) read() (Payload, error) {
-	hb := r.buf[:r.hdrlen]
+	hb := r.b[0:r.hbf.GetHdrLen()]
 	// TODO: Read() interrupt?
 	if _, err := r.conn.Read(hb); err != nil {
 		return nil, err
 	}
 
-	if err := r.hdr.Unmarshal(hb); err != nil {
+	if err := r.hbf.Unmarshal(hb); err != nil {
 		return nil, err
 	}
 
-	plen := r.hdr.GetPayloadLen()
-	pb := r.buf[r.hdrlen : r.hdrlen+plen]
+	plen := r.hbf.GetPayloadLen()
+	pb := r.b[r.hbf.GetHdrLen() : r.hbf.GetHdrLen()+plen]
 	// Support header-only message(udp or no payload at all).
 	if plen > 0 {
 		// TODO: enlarge b []byte if plen > r.maxlen or error out.
 		if n, err := r.conn.Read(pb); err != nil {
 			return nil, err
 		} else if uint32(n) != plen {
+			// TODO: error?
 		}
 	}
 
-	p := r.pf.New(r.hdr.GetPayloadId())
-	if err := p.UnmarshalPayload(pb); err != nil {
+	p, err := r.pbf.Unmarshal(r.hbf.GetPayloadId(), pb)
+	if err != nil {
 		return nil, err
 	}
 

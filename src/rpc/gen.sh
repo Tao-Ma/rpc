@@ -42,7 +42,52 @@ func NewProtobufFactory() PayloadFactory {
 	return PayloadFactory(pf)
 }
 
-func (pf *protobufFactory) New(id uint16) (p Payload) {
+type protobufBufferFactory struct {
+	buf proto.Buffer
+}
+
+func (pf *protobufFactory) NewBufferFactory() PayloadBufferFactory {
+	pbf := new(protobufBufferFactory)
+
+	return PayloadBufferFactory(pbf)
+}
+
+func (pbf *protobufBufferFactory) Marshal(p Payload, b []byte) ([]byte, error) {
+	// Refer: github.com/golang/protobuf/proto/encode.go
+	// func Marshal(pb Message) ([]byte, error)
+	m, ok := p.(proto.Message)
+	if !ok {
+		// TODO: error
+		return nil, nil
+	}
+
+	pbf.buf.SetBuf(b)
+	pbf.buf.Reset()
+	err := pbf.buf.Marshal(m)
+	if err != nil {
+		return nil, err
+	}
+
+	return pbf.buf.Bytes(), nil
+}
+
+func (pbf *protobufBufferFactory) Unmarshal(id uint16, b []byte) (Payload, error) {
+	p := pbf.New(id)
+	m, ok := p.(proto.Message)
+	if !ok {
+		// TODO: error
+		return nil, nil
+	}
+
+	pbf.buf.SetBuf(b)
+	if err := pbf.buf.Unmarshal(m); err != nil {
+		return nil, err
+	} else {
+		return p, nil
+	}
+}
+
+func (pbf *protobufBufferFactory) New(id uint16) (p Payload) {
 	switch id {
 EOF
 
@@ -71,14 +116,6 @@ func New${n}() *${n} {
 
 func (p *${n}) GetPayloadId() uint16 {
 	return ${n}Id
-}
-
-func (p *${n}) MarshalPayload() ([]byte, error) {
-	return proto.Marshal(p)
-}
-
-func (p *${n}) UnmarshalPayload(b []byte) error {
-	return proto.Unmarshal(b, p)
 }
 EOF
 done

@@ -9,27 +9,32 @@ import (
 )
 
 func TestHeaderFactory(t *testing.T) {
-	//hf := NewDefaultHeaderFactory()
+	hf := NewDefaultHeaderFactory()
+	hbf1 := hf.NewBufferFactory()
+	hbf2 := hf.NewBufferFactory()
+	b1 := make([]byte, hbf1.GetHdrLen())
+	b2 := make([]byte, hbf2.GetHdrLen())
 
-	h1 := NewHeader()
+	hbf1.SetPayloadId(1777)
+	hbf1.SetPayloadLen(100)
 
-	if h1.GetLen() != 16 {
+	if err := hbf1.Marshal(b1); err != nil {
+		t.FailNow()
+	}
+
+	if copy(b2, b1) != 16 {
+		t.FailNow()
+	}
+
+	if err := hbf2.Unmarshal(b2); err != nil {
+		t.FailNow()
+	}
+
+	if hbf1.GetPayloadId() != hbf2.GetPayloadId() {
 		t.Fail()
 	}
 
-	h1.SetPayloadId(1777)
-	h1.SetPayloadLen(100)
-
-	b, _ := h1.Marshal()
-
-	h2 := NewHeader()
-	_ = h2.Unmarshal(b)
-
-	if h1.GetPayloadId() != h2.GetPayloadId() {
-		t.Fail()
-	}
-
-	if h1.GetPayloadLen() != h2.GetPayloadLen() {
+	if hbf1.GetPayloadLen() != hbf2.GetPayloadLen() {
 		t.Fail()
 	}
 }

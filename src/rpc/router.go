@@ -82,14 +82,6 @@ func (m *msg) GetPayloadId() uint16 {
 	return m.p.GetPayloadId()
 }
 
-func (m *msg) MarshalPayload() ([]byte, error) {
-	return m.p.MarshalPayload()
-}
-
-func (m *msg) UnmarshalPayload(b []byte) error {
-	return m.p.UnmarshalPayload(b)
-}
-
 func (ep *EndPoint) wrap(p Payload) Payload {
 	if ep.wrapper != nil {
 		return ep.wrapper.wrap(ep, p)

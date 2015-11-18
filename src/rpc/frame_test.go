@@ -3,7 +3,6 @@
 
 package rpc
 
-/*
 import (
 	"github.com/golang/protobuf/proto"
 	"io"
@@ -48,4 +47,3 @@ func TestMockMsg(t *testing.T) {
 	w.Stop()
 	r.Stop()
 }
-*/

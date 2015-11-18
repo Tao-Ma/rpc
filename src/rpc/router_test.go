@@ -44,16 +44,6 @@ func (r *ResourceResp) RpcIsResponse() bool {
 
 func ServiceProcessConn(r *Router, c net.Conn) bool {
 	return false
-	/*
-		ep := r.newHijackedEndPoint("hijacked", c, r.hf, r.pf)
-
-		ep.Read()
-		ep.Write()
-		<-time.Tick(1 * time.Second)
-
-		ep.Close()
-		return true
-	*/
 }
 
 func ServiceProcessPayload(r *Router, name string, p Payload) bool {
@@ -98,12 +88,10 @@ func TestRouter(t *testing.T) {
 	}
 
 	req := NewResourceReq()
-	/*
-		if resp := r.CallWait(name, req, 0); resp == nil {
-			//t.Log("CallWait timeout")
-			//t.FailNow()
-		}
-	*/
+	//	if resp := r.CallWait(name, req, 0); resp == nil {
+	//t.Log("CallWait timeout")
+	//t.FailNow()
+	//	}
 
 	done := make(chan bool)
 	r.Call("scheduler", req, ClientProcessReponse, done)

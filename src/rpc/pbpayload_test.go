@@ -10,6 +10,8 @@ import (
 
 func TestProtobufFactory(t *testing.T) {
 	pf := NewProtobufFactory()
+	pbf1 := pf.NewBufferFactory()
+	b1 := make([]byte, 4096)
 
 	if ResourceReqId != 1 {
 		t.Fail()
@@ -18,10 +20,17 @@ func TestProtobufFactory(t *testing.T) {
 	d1 := NewResourceReq()
 	d1.Id = proto.Uint64(10086)
 
-	b, _ := d1.MarshalPayload()
+	b3, err := pbf1.Marshal(d1, b1)
+	if err != nil {
+		t.Log(err)
+		t.FailNow()
+	}
 
-	d2 := pf.New(ResourceReqId)
-	_ = d2.UnmarshalPayload(b)
+	d2, err := pbf1.Unmarshal(ResourceReqId, b3)
+	if err != nil {
+		t.Log(len(b1))
+		t.FailNow()
+	}
 
 	if d1.GetPayloadId() != d2.GetPayloadId() {
 		t.Fail()
