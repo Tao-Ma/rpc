@@ -126,9 +126,35 @@ func TestReadWriter(t *testing.T) {
 	<-ch_d
 }
 
-func BenchmarkReadWriter(b *testing.B) {
-	//s, c := net.Pipe()
+func BenchmarkPipeReadWriter(b *testing.B) {
+	s, c := net.Pipe()
 
+	ch_c_w := make(chan Payload, 1024)
+	ch_s_w := make(chan Payload, 1024)
+	ch_d := make(chan Payload, 1024)
+
+	hf := NewDefaultHeaderFactory()
+	pf := NewProtobufFactory()
+
+	ep_c := NewEndPoint("c", c, ch_c_w, ch_d, nil, hf, pf, nil)
+	ep_s := NewEndPoint("s", s, ch_s_w, ch_s_w, nil, hf, pf, nil)
+
+	ep_c.Run()
+	ep_s.Run()
+
+	b.ResetTimer()
+	b.RunParallel(func(pb *testing.PB) {
+		req := NewResourceReq()
+		req.Id = proto.Uint64(1)
+		for pb.Next() {
+			ch_c_w <- req
+			<-ch_d
+		}
+	})
+
+}
+
+func BenchmarkTCPReadWriter(b *testing.B) {
 	network := "tcp"
 	address := "localhost:10008"
 
@@ -170,7 +196,7 @@ func BenchmarkReadWriter(b *testing.B) {
 
 }
 
-func BenchmarkRouter(b *testing.B) {
+func BenchmarkPipeRouter(b *testing.B) {
 	r, err := NewRouter(nil, ServiceProcessPayload)
 	if err != nil {
 		b.FailNow()
@@ -208,11 +234,11 @@ func BenchmarkRouter(b *testing.B) {
 	b.RunParallel(func(pb *testing.PB) {
 		for pb.Next() {
 			req := NewResourceReq()
-			r.Call("scheduler", req, ClientProcessReponseIgnore, nil)
-			//if resp := r.CallWait(name, req, 0); resp == nil {
-			//		b.Log("CallWait timeout")
-			//	b.FailNow()
-			//}
+			//r.Call("scheduler", req, ClientProcessReponseIgnore, nil)
+			if resp := r.CallWait(name, req, 0); resp == nil {
+				b.Log("CallWait timeout")
+				b.FailNow()
+			}
 		}
 	})
 
@@ -223,7 +249,7 @@ func BenchmarkRouter(b *testing.B) {
 	r.Stop()
 }
 
-func BenchmarkTcpSyncReadWriteSeperate(b *testing.B) {
+func BenchmarkTCPReadWrite(b *testing.B) {
 	network := "tcp"
 	address := "localhost:10009"
 
@@ -301,7 +327,7 @@ func BenchmarkTcpSyncReadWriteSeperate(b *testing.B) {
 	})
 }
 
-func BenchmarkPipeSyncReadWriteSeperate(b *testing.B) {
+func BenchmarkPipeReadWrite(b *testing.B) {
 	s, c := net.Pipe()
 
 	ch_r := make(chan uint64, 1024)
@@ -361,108 +387,6 @@ func BenchmarkPipeSyncReadWriteSeperate(b *testing.B) {
 		for pb.Next() {
 			ch_w <- 1
 			<-ch_d
-		}
-	})
-}
-
-func BenchmarkPipeShare(b *testing.B) {
-
-	s, c := net.Pipe()
-	go func(s net.Conn) {
-		for {
-			bi1 := make([]byte, 16)
-			s.Read(bi1)
-			bi2 := make([]byte, 3)
-			s.Read(bi2)
-			bo := make([]byte, 19)
-			s.Write(bo)
-		}
-	}(s)
-	b.ResetTimer()
-	b.RunParallel(func(pb *testing.PB) {
-		for pb.Next() {
-			bo := make([]byte, 19)
-			c.Write(bo)
-			bi1 := make([]byte, 16)
-			c.Read(bi1)
-			bi2 := make([]byte, 3)
-			c.Read(bi2)
-		}
-	})
-}
-
-func BenchmarkTcpShare(b *testing.B) {
-	network := "tcp"
-	address := "localhost:10003"
-
-	l, err := net.Listen(network, address)
-	if err != nil {
-		b.FailNow()
-	}
-	c, err := net.Dial(network, address)
-	if err != nil {
-		b.FailNow()
-	}
-	s, _ := l.Accept()
-	go func(s net.Conn) {
-		for {
-			bi1 := make([]byte, 16)
-			s.Read(bi1)
-			bi2 := make([]byte, 3)
-			s.Read(bi2)
-			bo := make([]byte, 19)
-			s.Write(bo)
-		}
-	}(s)
-	b.ResetTimer()
-	b.RunParallel(func(pb *testing.PB) {
-		for pb.Next() {
-			bo := make([]byte, 19)
-			c.Write(bo)
-			bi1 := make([]byte, 16)
-			c.Read(bi1)
-			bi2 := make([]byte, 3)
-			c.Read(bi2)
-		}
-	})
-}
-
-func BenchmarkTcpReadWriteSeperate(b *testing.B) {
-	network := "tcp"
-	address := "localhost:10005"
-
-	l, err := net.Listen(network, address)
-	if err != nil {
-		b.FailNow()
-	}
-	c, err := net.Dial(network, address)
-	if err != nil {
-		b.FailNow()
-	}
-	s, _ := l.Accept()
-	go func(s net.Conn) {
-		for {
-			bi1 := make([]byte, 16)
-			s.Read(bi1)
-			bi2 := make([]byte, 3)
-			s.Read(bi2)
-		}
-	}(s)
-	go func(s net.Conn) {
-		for {
-			bo := make([]byte, 19)
-			s.Write(bo)
-		}
-	}(s)
-	b.ResetTimer()
-	b.RunParallel(func(pb *testing.PB) {
-		for pb.Next() {
-			bo := make([]byte, 19)
-			c.Write(bo)
-			bi1 := make([]byte, 16)
-			c.Read(bi1)
-			bi2 := make([]byte, 3)
-			c.Read(bi2)
 		}
 	})
 }

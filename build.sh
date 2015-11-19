@@ -35,5 +35,5 @@ if [ "$gen_analyze" = "true" ]; then
 	echo "png > $cpupng"  | go tool pprof -ignore=testing "$bin" "$cpuprofile"
 	echo "png > $memopng" | go tool pprof -ignore=testing -alloc_objects "$bin" "$memprofile"
 	echo "png > $memspng" | go tool pprof -ignore=testing -alloc_space "$bin" "$memprofile"
-	echo "png > $blockpng"| go tool pprof -ignore=testing "$bin" "$blockpng"
+	echo "png > $blockpng"| go tool pprof -ignore=testing "$bin" "$blockprofile"
 fi

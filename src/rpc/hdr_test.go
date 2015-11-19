@@ -4,7 +4,6 @@
 package rpc
 
 import (
-	_ "github.com/golang/protobuf/proto"
 	"testing"
 )
 
