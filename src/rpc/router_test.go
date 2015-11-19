@@ -5,6 +5,7 @@ package rpc
 
 import (
 	"github.com/golang/protobuf/proto"
+	"math/rand"
 	"net"
 	"testing"
 	"time"
@@ -205,37 +206,64 @@ func BenchmarkPipeRouter(b *testing.B) {
 	hf := NewDefaultHeaderFactory()
 	pf := NewProtobufFactory()
 
-	name := "scheduler"
-	/*
-		network := "tcp"
-		address := "localhost:10001"
-
-		r.Run()
-		<-time.Tick(1 * time.Millisecond)
-		if err := r.ListenAndServe("client", network, address, hf, pf, ServiceProcessConn); err != nil {
-			b.Log(err)
-			b.FailNow()
-		}
-		if err := r.Dial(name, network, address, hf, pf); err != nil {
-			b.Log(err)
-			b.FailNow()
-		}
-	*/
 	r.Run()
 	<-time.Tick(1 * time.Millisecond)
-	c, s := net.Pipe()
-	ep_c := r.newRouterEndPoint(name, c, hf, pf)
-	ep_s := r.newRouterEndPoint("client", s, hf, pf)
-	r.AddEndPoint(ep_c)
-	r.AddEndPoint(ep_s)
+
+	name := "scheduler"
+	n := 100
+	for i := 0; i < n; i++ {
+		c, s := net.Pipe()
+		ep_c := r.newRouterEndPoint(name+string(i), c, hf, pf)
+		ep_s := r.newRouterEndPoint("client"+string(n), s, hf, pf)
+		r.AddEndPoint(ep_c)
+		r.AddEndPoint(ep_s)
+	}
 
 	<-time.Tick(1 * time.Millisecond)
+	testRouter(b, r, n)
+}
+
+func BenchmarkTCPRouter(b *testing.B) {
+	r, err := NewRouter(nil, ServiceProcessPayload)
+	if err != nil {
+		b.FailNow()
+	}
+
+	hf := NewDefaultHeaderFactory()
+	pf := NewProtobufFactory()
+
+	r.Run()
+	<-time.Tick(1 * time.Millisecond)
+
+	network := "tcp"
+	address := "localhost:10001"
+	if err := r.ListenAndServe("client", network, address, hf, pf, ServiceProcessConn); err != nil {
+		b.Log(err)
+		b.FailNow()
+	}
+
+	name := "scheduler"
+	n := 100
+	for i := 0; i < n; i++ {
+		if err := r.Dial(name+string(i), network, address, hf, pf); err != nil {
+			b.Log(err)
+			b.FailNow()
+		}
+	}
+
+	<-time.Tick(1 * time.Millisecond)
+	testRouter(b, r, n)
+}
+
+func testRouter(b *testing.B, r *Router, n int) {
+	name := "scheduler"
 	b.ResetTimer()
 	b.RunParallel(func(pb *testing.PB) {
 		for pb.Next() {
 			req := NewResourceReq()
+			i := rand.Intn(n)
 			//r.Call("scheduler", req, ClientProcessReponseIgnore, nil)
-			if resp := r.CallWait(name, req, 0); resp == nil {
+			if resp := r.CallWait(name+string(i), req, 0); resp == nil {
 				b.Log("CallWait timeout")
 				b.FailNow()
 			}
