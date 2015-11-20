@@ -4,7 +4,6 @@
 package rpc
 
 import (
-	"errors"
 	"log"
 	"net"
 	"os"
@@ -90,7 +89,12 @@ func (ep *EndPoint) wrap(p Payload) Payload {
 }
 
 func (r *Router) wrap(ep *EndPoint, p Payload) Payload {
-	m := new(msg)
+	var m *msg
+	select {
+	case m = <-r.msgs:
+	default:
+		m = new(msg)
+	}
 
 	m.name = ep.name
 	m.ep = ep
@@ -102,25 +106,6 @@ func (r *Router) wrap(ep *EndPoint, p Payload) Payload {
 	}
 
 	return m
-}
-
-func (ep *EndPoint) read() (Payload, error) {
-	if ep.hijacked {
-		return ep.r.read()
-	} else {
-		// TODO: ERROR
-		return nil, nil
-	}
-}
-
-func (ep *EndPoint) Read() {
-	if ep.hijacked {
-		// TODO:
-		return
-	} else {
-		panic("someone try to Read() a hijacked EndPoint")
-		return
-	}
 }
 
 func (ep *EndPoint) write(p Payload) error {
@@ -243,6 +228,9 @@ type Router struct {
 	next  uint64
 	calls map[uint64]*rpc
 
+	rpcs chan *rpc
+	msgs chan *msg
+
 	serve ServePayload
 
 	timeout time.Duration
@@ -267,11 +255,15 @@ func NewRouter(logger *log.Logger, serve ServePayload) (*Router, error) {
 	r.ep_in = make(chan *EndPoint, 32)
 	r.ep_out = make(chan string, 128)
 
-	r.in = make(chan Payload, 1024*5)
-	r.out = make(chan *rpc, 1024*5)
+	n := 1024 * 5
+	r.in = make(chan Payload, n)
+	r.out = make(chan *rpc, n)
 
 	r.calls = make(map[uint64]*rpc)
 	r.next = 1
+
+	r.rpcs = make(chan *rpc, n)
+	r.msgs = make(chan *msg, n)
 
 	r.serve = serve
 
@@ -350,7 +342,12 @@ func (r *Router) CallWait(name string, p Payload, n time.Duration) Payload {
 
 // Call async
 func (r *Router) Call(name string, p Payload, cb rpc_callback, arg rpc_arg) {
-	c := new(rpc)
+	var c *rpc
+	select {
+	case c = <-r.rpcs:
+	default:
+		c = new(rpc)
+	}
 
 	c.name = name
 	c.cb = cb
@@ -564,11 +561,19 @@ forever:
 			} else {
 				// TODO: route
 				// new payload read from endpoint
-				if c, err := r.RpcIn(m); err != nil {
+				if c := r.RpcIn(m); c == nil {
 					// TODO: not a rpc or rpc timeout/cancel
 					go r.serve(r, m.name, m.p)
 				} else {
 					go c.cb(m.p, c.arg, nil)
+					select {
+					case r.rpcs <- c:
+					default:
+					}
+				}
+				select {
+				case r.msgs <- m:
+				default:
 				}
 			}
 		}
@@ -576,30 +581,32 @@ forever:
 }
 
 func (r *Router) RpcOut(c *rpc) {
-	if c.r != nil && c.isreq {
-		c.id = r.next
-		r.next++
-		if _, exist := r.calls[c.id]; exist {
-			panic("RpcOut id duplicate")
-		} else {
-			r.calls[c.id] = c
-			c.r.RpcSetId(c.id)
-		}
+	if c.r == nil || !c.isreq {
+		return
+	}
+
+	c.id = r.next
+	r.next++
+	if _, exist := r.calls[c.id]; exist {
+		panic("RpcOut id duplicate")
+	} else {
+		r.calls[c.id] = c
+		c.r.RpcSetId(c.id)
 	}
 }
 
-// TODO: Payload will change
-func (r *Router) RpcIn(m *msg) (*rpc, error) {
-	if m.r != nil && m.isresp {
-		id := m.r.RpcGetId()
-		if c, exist := r.calls[id]; !exist {
-			// timeout or cancel
-			return nil, errors.New("")
-		} else {
-			return c, nil
-		}
+func (r *Router) RpcIn(m *msg) *rpc {
+	if m.r == nil || !m.isresp {
+		return nil
 	}
-	return nil, errors.New("")
+
+	id := m.r.RpcGetId()
+	if c, exist := r.calls[id]; !exist {
+		// timeout or cancel, the callback should be called.
+		return nil
+	} else {
+		return c
+	}
 }
 
 // Endpoint.Read/Write
@@ -607,4 +614,3 @@ func (r *Router) RpcIn(m *msg) (*rpc, error) {
 // Error
 // EndPoint/Listener must send join/left msg to sync with others!
 // Log
-// Performance

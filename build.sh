@@ -14,6 +14,7 @@ if [ ! -e "$tmp" ]; then
 fi
 
 pkgname='rpc'
+profile=true
 
 bin="$tmp/$pkgname.test"
 cpuprofile="$tmp/cpu.out"
@@ -25,13 +26,16 @@ memopng="$tmp/memo.png"
 blockpng="$tmp/block.png"
 
 echo "INFO: build test binary file: $bin"
-go test -o "$bin" "$pkgname" || exit 1
 
 #GODEBUG=gctrace=1
 #GODEBUG=schedtrace=1000
-go test "$pkgname" -bench=. -benchtime 10s  #-cpu 4 -cpuprofile "$cpuprofile" -memprofile "$memprofile" -blockprofile "$blockprofile"
+if [ "$profile" = "true" ]; then
+	profile_flags="-o $bin -cpuprofile $cpuprofile -memprofile $memprofile -blockprofile $blockprofile"
+fi
 
-if [ "$gen_analyze" = "true" ]; then
+go test "$pkgname" -bench=Router -benchtime 60s -cpu 32 $profile_flags
+
+if [ "$profile" = "true" ]; then
 	echo "png > $cpupng"  | go tool pprof -ignore=testing "$bin" "$cpuprofile"
 	echo "png > $memopng" | go tool pprof -ignore=testing -alloc_objects "$bin" "$memprofile"
 	echo "png > $memspng" | go tool pprof -ignore=testing -alloc_space "$bin" "$memprofile"
