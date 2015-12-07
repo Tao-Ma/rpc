@@ -197,6 +197,12 @@ type RpcMsg interface {
 type rpc_callback func(Payload, rpc_arg, error)
 type rpc_arg interface{}
 
+type waiter struct {
+	ch chan Payload
+	// where we belones to
+	r *Router
+}
+
 type rpc struct {
 	id uint64
 
@@ -228,8 +234,9 @@ type Router struct {
 	next  uint64
 	calls map[uint64]*rpc
 
-	rpcs chan *rpc
-	msgs chan *msg
+	waiters chan *waiter
+	rpcs    chan *rpc
+	msgs    chan *msg
 
 	serve ServePayload
 
@@ -262,6 +269,7 @@ func NewRouter(logger *log.Logger, serve ServePayload) (*Router, error) {
 	r.calls = make(map[uint64]*rpc)
 	r.next = 1
 
+	r.waiters = make(chan *waiter, n)
 	r.rpcs = make(chan *rpc, n)
 	r.msgs = make(chan *msg, n)
 
@@ -305,39 +313,55 @@ func channelTimeoutWait(ch chan interface{}, v interface{}, timeout time.Duratio
 }
 
 // calldone is a helper to notify sync CallWait()
-func calldone(p Payload, ch rpc_arg, err error) {
-	// TODO: timeoud case may crash? Take care of the race condition!
-	if ch, ok := ch.(chan Payload); !ok {
+func calldone(p Payload, arg rpc_arg, err error) {
+	// TODO: timeout case may crash? Take care of the race condition!
+	if w, ok := arg.(*waiter); !ok {
 		panic("calldone")
 	} else if err != nil {
 		// TODO: error ?
-		ch <- nil
+		w.ch <- nil
 	} else {
-		ch <- p
+		w.ch <- p
 	}
 }
 
 // Call sync
 func (r *Router) CallWait(name string, p Payload, n time.Duration) Payload {
-	ch := make(chan Payload, 1)
+	var (
+		w      *waiter
+		result Payload
+	)
 
-	r.Call(name, p, calldone, ch)
+	select {
+	case w = <-r.waiters:
+	default:
+		w = new(waiter)
+		w.ch = make(chan Payload, 1)
+		w.r = r
+	}
+
+	r.Call(name, p, calldone, w)
 
 	// Wait result
 	select {
-	case p := <-ch:
-		return p
+	case result = <-w.ch:
 	default:
 		select {
-		case p := <-ch:
-			return p
+		case result = <-w.ch:
 		case <-time.Tick(n * time.Second):
-			return nil
 		}
 	}
 
-	// can not reach
-	return nil
+	if result != nil {
+		select {
+		case r.waiters <- w:
+		default:
+		}
+	} else {
+		// TODO: w & w.ch leak!
+	}
+
+	return result
 }
 
 // Call async
