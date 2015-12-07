@@ -159,7 +159,7 @@ func (l *Listener) Close() {
 	l.l.Close()
 }
 
-func (l *Listener) ServiceLoop(q chan bool, r chan bool) {
+func (l *Listener) ServiceLoop(q chan struct{}, r chan bool) {
 	go l.accepter(r)
 
 	select {
@@ -520,7 +520,7 @@ func (r *Router) ListenAndServe(name string, network string, address string, hf 
 	return nil
 }
 
-func (r *Router) ServiceLoop(quit chan bool, ready chan bool) {
+func (r *Router) ServiceLoop(quit chan struct{}, ready chan bool) {
 	ready <- true
 
 forever:

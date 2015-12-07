@@ -46,14 +46,14 @@ type PayloadFactory interface {
 }
 
 type ServiceLoop interface {
-	ServiceLoop(chan bool, chan bool)
+	ServiceLoop(chan struct{}, chan bool)
 }
 
 type BackgroudService struct {
 	running bool
 	err     error
 
-	quit  chan bool
+	quit  chan struct{}
 	ready chan bool
 
 	l ServiceLoop
@@ -77,7 +77,7 @@ func (bg *BackgroudService) Run() {
 		return
 	}
 
-	bg.quit = make(chan bool, 1)
+	bg.quit = make(chan struct{}, 1)
 	bg.ready = make(chan bool, 1)
 
 	go bg.l.ServiceLoop(bg.quit, bg.ready)
@@ -100,13 +100,6 @@ func (bg *BackgroudService) Stop() {
 	}
 
 	bg.running = false
-
-	select {
-	case bg.quit <- true:
-	case <-time.Tick(bg.stop_timeout):
-		// TODO: bg.err
-	}
-
 	close(bg.quit)
 }
 
@@ -195,7 +188,7 @@ func (w *Writer) write(p Payload) ([]byte, error) {
 	return b, nil
 }
 
-func (w *Writer) ServiceLoop(q chan bool, r chan bool) {
+func (w *Writer) ServiceLoop(q chan struct{}, r chan bool) {
 	r <- true
 forever:
 	for {
@@ -273,7 +266,7 @@ func (r *Reader) Stop() {
 	r.bg.Stop()
 }
 
-func (r *Reader) ServiceLoop(q chan bool, ready chan bool) {
+func (r *Reader) ServiceLoop(q chan struct{}, ready chan bool) {
 	ready <- true
 forever:
 	for {
