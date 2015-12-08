@@ -21,11 +21,10 @@ func TestMockMsg(t *testing.T) {
 	ch := make(chan Payload)
 	tw := &TestWrapper{}
 
-	hf := NewDefaultHeaderFactory()
-	pf := NewProtobufFactory()
+	hf := NewMsgHeaderFactory(NewProtobufFactory())
 
-	w := NewWriter(pw, ch, hf, pf, nil)
-	r := NewReader(pr, ch, tw, hf, pf, nil)
+	w := NewWriter(pw, ch, hf, nil)
+	r := NewReader(pr, ch, tw, hf, nil)
 
 	w.Run()
 	r.Run()

@@ -70,8 +70,7 @@ func TestRouter(t *testing.T) {
 		t.FailNow()
 	}
 
-	hf := NewDefaultHeaderFactory()
-	pf := NewProtobufFactory()
+	hf := NewMsgHeaderFactory(NewProtobufFactory())
 
 	name := "scheduler"
 	network := "tcp"
@@ -79,11 +78,11 @@ func TestRouter(t *testing.T) {
 
 	r.Run()
 
-	if err := r.ListenAndServe("client", network, address, hf, pf, ServiceProcessConn); err != nil {
+	if err := r.ListenAndServe("client", network, address, hf, ServiceProcessConn); err != nil {
 		t.Log(err)
 		t.FailNow()
 	}
-	if err := r.Dial(name, network, address, hf, pf); err != nil {
+	if err := r.Dial(name, network, address, hf); err != nil {
 		t.Log(err)
 		t.FailNow()
 	}
@@ -112,11 +111,10 @@ func TestReadWriter(t *testing.T) {
 	ch_s_w := make(chan Payload, 1024)
 	ch_d := make(chan Payload, 1024)
 
-	hf := NewDefaultHeaderFactory()
-	pf := NewProtobufFactory()
+	hf := NewMsgHeaderFactory(NewProtobufFactory())
 
-	ep_c := NewEndPoint("c", c, ch_c_w, ch_d, nil, hf, pf, nil)
-	ep_s := NewEndPoint("s", s, ch_s_w, ch_s_w, nil, hf, pf, nil)
+	ep_c := NewEndPoint("c", c, ch_c_w, ch_d, nil, hf, nil)
+	ep_s := NewEndPoint("s", s, ch_s_w, ch_s_w, nil, hf, nil)
 
 	ep_c.Run()
 	ep_s.Run()
@@ -134,11 +132,10 @@ func BenchmarkPipeReadWriter(b *testing.B) {
 	ch_s_w := make(chan Payload, 1024)
 	ch_d := make(chan Payload, 1024)
 
-	hf := NewDefaultHeaderFactory()
-	pf := NewProtobufFactory()
+	hf := NewMsgHeaderFactory(NewProtobufFactory())
 
-	ep_c := NewEndPoint("c", c, ch_c_w, ch_d, nil, hf, pf, nil)
-	ep_s := NewEndPoint("s", s, ch_s_w, ch_s_w, nil, hf, pf, nil)
+	ep_c := NewEndPoint("c", c, ch_c_w, ch_d, nil, hf, nil)
+	ep_s := NewEndPoint("s", s, ch_s_w, ch_s_w, nil, hf, nil)
 
 	ep_c.Run()
 	ep_s.Run()
@@ -176,11 +173,10 @@ func BenchmarkTCPReadWriter(b *testing.B) {
 	ch_s_w := make(chan Payload, 1024)
 	ch_d := make(chan Payload, 1024)
 
-	hf := NewDefaultHeaderFactory()
-	pf := NewProtobufFactory()
+	hf := NewMsgHeaderFactory(NewProtobufFactory())
 
-	ep_c := NewEndPoint("c", c, ch_c_w, ch_d, nil, hf, pf, nil)
-	ep_s := NewEndPoint("s", s, ch_s_w, ch_s_w, nil, hf, pf, nil)
+	ep_c := NewEndPoint("c", c, ch_c_w, ch_d, nil, hf, nil)
+	ep_s := NewEndPoint("s", s, ch_s_w, ch_s_w, nil, hf, nil)
 
 	ep_c.Run()
 	ep_s.Run()
@@ -207,8 +203,7 @@ func BenchmarkPipeSeperateRouter(b *testing.B) {
 		b.FailNow()
 	}
 
-	hf := NewDefaultHeaderFactory()
-	pf := NewProtobufFactory()
+	hf := NewMsgHeaderFactory(NewProtobufFactory())
 
 	server_r.Run()
 	client_r.Run()
@@ -218,8 +213,8 @@ func BenchmarkPipeSeperateRouter(b *testing.B) {
 	n := 128
 	for i := 0; i < n; i++ {
 		c, s := net.Pipe()
-		ep_c := client_r.newRouterEndPoint(name+string(i), c, hf, pf)
-		ep_s := server_r.newRouterEndPoint("client"+string(n), s, hf, pf)
+		ep_c := client_r.newRouterEndPoint(name+string(i), c, hf)
+		ep_s := server_r.newRouterEndPoint("client"+string(n), s, hf)
 		client_r.AddEndPoint(ep_c)
 		server_r.AddEndPoint(ep_s)
 	}
@@ -234,8 +229,7 @@ func BenchmarkPipeShareRouter(b *testing.B) {
 		b.FailNow()
 	}
 
-	hf := NewDefaultHeaderFactory()
-	pf := NewProtobufFactory()
+	hf := NewMsgHeaderFactory(NewProtobufFactory())
 
 	r.Run()
 	<-time.Tick(1 * time.Millisecond)
@@ -244,8 +238,8 @@ func BenchmarkPipeShareRouter(b *testing.B) {
 	n := 128
 	for i := 0; i < n; i++ {
 		c, s := net.Pipe()
-		ep_c := r.newRouterEndPoint(name+string(i), c, hf, pf)
-		ep_s := r.newRouterEndPoint("client"+string(n), s, hf, pf)
+		ep_c := r.newRouterEndPoint(name+string(i), c, hf)
+		ep_s := r.newRouterEndPoint("client"+string(n), s, hf)
 		r.AddEndPoint(ep_c)
 		r.AddEndPoint(ep_s)
 	}
@@ -264,8 +258,7 @@ func BenchmarkTCPSeperateRouter(b *testing.B) {
 		b.FailNow()
 	}
 
-	hf := NewDefaultHeaderFactory()
-	pf := NewProtobufFactory()
+	hf := NewMsgHeaderFactory(NewProtobufFactory())
 
 	server_r.Run()
 	client_r.Run()
@@ -273,7 +266,7 @@ func BenchmarkTCPSeperateRouter(b *testing.B) {
 
 	network := "tcp"
 	address := "localhost:10001"
-	if err := server_r.ListenAndServe("client", network, address, hf, pf, ServiceProcessConn); err != nil {
+	if err := server_r.ListenAndServe("client", network, address, hf, ServiceProcessConn); err != nil {
 		b.Log(err)
 		b.FailNow()
 	}
@@ -281,7 +274,7 @@ func BenchmarkTCPSeperateRouter(b *testing.B) {
 	name := "scheduler"
 	n := 128
 	for i := 0; i < n; i++ {
-		if err := client_r.Dial(name+string(i), network, address, hf, pf); err != nil {
+		if err := client_r.Dial(name+string(i), network, address, hf); err != nil {
 			b.Log(err)
 			b.FailNow()
 		}
@@ -297,15 +290,14 @@ func BenchmarkTCPShareRouter(b *testing.B) {
 		b.FailNow()
 	}
 
-	hf := NewDefaultHeaderFactory()
-	pf := NewProtobufFactory()
+	hf := NewMsgHeaderFactory(NewProtobufFactory())
 
 	r.Run()
 	<-time.Tick(1 * time.Millisecond)
 
 	network := "tcp"
 	address := "localhost:10001"
-	if err := r.ListenAndServe("client", network, address, hf, pf, ServiceProcessConn); err != nil {
+	if err := r.ListenAndServe("client", network, address, hf, ServiceProcessConn); err != nil {
 		b.Log(err)
 		b.FailNow()
 	}
@@ -313,7 +305,7 @@ func BenchmarkTCPShareRouter(b *testing.B) {
 	name := "scheduler"
 	n := 128
 	for i := 0; i < n; i++ {
-		if err := r.Dial(name+string(i), network, address, hf, pf); err != nil {
+		if err := r.Dial(name+string(i), network, address, hf); err != nil {
 			b.Log(err)
 			b.FailNow()
 		}

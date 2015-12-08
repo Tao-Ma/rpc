@@ -30,7 +30,7 @@ type EndPoint struct {
 	logger *log.Logger
 }
 
-func NewEndPoint(name string, c net.Conn, out chan Payload, in chan Payload, wrapper EPWrapper, hf HeaderFactory, pf PayloadFactory, logger *log.Logger) *EndPoint {
+func NewEndPoint(name string, c net.Conn, out chan Payload, in chan Payload, wrapper EPWrapper, mf MsgFactory, logger *log.Logger) *EndPoint {
 	ep := new(EndPoint)
 
 	ep.name = name
@@ -47,8 +47,8 @@ func NewEndPoint(name string, c net.Conn, out chan Payload, in chan Payload, wra
 
 	ep.wrapper = wrapper
 
-	ep.w = NewWriter(c, out, hf, pf, logger)
-	ep.r = NewReader(c, in, ep, hf, pf, logger)
+	ep.w = NewWriter(c, out, mf, logger)
+	ep.r = NewReader(c, in, ep, mf, logger)
 
 	return ep
 }
@@ -75,10 +75,6 @@ type msg struct {
 
 	r      RpcMsg
 	isresp bool
-}
-
-func (m *msg) GetPayloadId() uint16 {
-	return m.p.GetPayloadId()
 }
 
 func (ep *EndPoint) wrap(p Payload) Payload {
@@ -116,8 +112,7 @@ type Listener struct {
 	name string
 	l    net.Listener
 
-	hf HeaderFactory
-	pf PayloadFactory
+	mf MsgFactory
 
 	r     *Router
 	serve ServeConn
@@ -125,7 +120,7 @@ type Listener struct {
 	bg *BackgroudService
 }
 
-func NewListener(name string, listener net.Listener, hf HeaderFactory, pf PayloadFactory, r *Router, serve ServeConn) (*Listener, error) {
+func NewListener(name string, listener net.Listener, mf MsgFactory, r *Router, serve ServeConn) (*Listener, error) {
 	l := new(Listener)
 
 	if bg, err := NewBackgroundService(l); err != nil {
@@ -136,8 +131,7 @@ func NewListener(name string, listener net.Listener, hf HeaderFactory, pf Payloa
 
 	l.name = name
 	l.l = listener
-	l.hf = hf
-	l.pf = pf
+	l.mf = mf
 
 	// TODO: change this to interface
 	l.r = r
@@ -178,7 +172,7 @@ func (l *Listener) accepter(r chan bool) {
 			break
 		} else if l.serve != nil && l.serve(l.r, c) {
 			// TODO: serve
-		} else if ep := l.r.newRouterEndPoint(l.name, c, l.hf, l.pf); ep == nil {
+		} else if ep := l.r.newRouterEndPoint(l.name, c, l.mf); ep == nil {
 			// TODO: name!
 			break
 		} else {
@@ -410,11 +404,11 @@ type ServePayload func(*Router, string, Payload) bool
 type RouteOut func(*Router, Payload)
 type RouteIn func(*Router, Payload)
 
-func (r *Router) newRouterEndPoint(name string, c net.Conn, hf HeaderFactory, pf PayloadFactory) *EndPoint {
-	return NewEndPoint(name, c, make(chan Payload, 1024), r.in, r, hf, pf, r.logger)
+func (r *Router) newRouterEndPoint(name string, c net.Conn, mf MsgFactory) *EndPoint {
+	return NewEndPoint(name, c, make(chan Payload, 1024), r.in, r, mf, r.logger)
 }
 
-func (r *Router) newHijackedEndPoint(name string, c net.Conn, hf HeaderFactory, pf PayloadFactory, logger *log.Logger) *EndPoint {
+func (r *Router) newHijackedEndPoint(name string, c net.Conn, mf MsgFactory, logger *log.Logger) *EndPoint {
 	return nil
 }
 
@@ -484,6 +478,7 @@ func (r *Router) AddListener(l *Listener) error {
 }
 
 func (r *Router) DelListener(name string) error {
+	// Add token recycle policy can prevent close(channel)
 	select {
 	case r.l_out <- name:
 	default:
@@ -516,10 +511,10 @@ func (r *Router) delListener(name string) *Listener {
 	}
 }
 
-func (r *Router) Dial(name string, network string, address string, hf HeaderFactory, pf PayloadFactory) error {
+func (r *Router) Dial(name string, network string, address string, mf MsgFactory) error {
 	if c, err := net.Dial(network, address); err != nil {
 		return err
-	} else if ep := r.newRouterEndPoint(name, c, hf, pf); ep == nil {
+	} else if ep := r.newRouterEndPoint(name, c, mf); ep == nil {
 		c.Close()
 		return err
 	} else if err := r.AddEndPoint(ep); err != nil {
@@ -530,10 +525,10 @@ func (r *Router) Dial(name string, network string, address string, hf HeaderFact
 	return nil
 }
 
-func (r *Router) ListenAndServe(name string, network string, address string, hf HeaderFactory, pf PayloadFactory, server ServeConn) error {
+func (r *Router) ListenAndServe(name string, network string, address string, mf MsgFactory, server ServeConn) error {
 	if l, err := net.Listen(network, address); err != nil {
 		return err
-	} else if l, err := NewListener(name, l, hf, pf, r, server); err != nil {
+	} else if l, err := NewListener(name, l, mf, r, server); err != nil {
 		l.Close()
 		return err
 	} else if err := r.AddListener(l); err != nil {

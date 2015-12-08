@@ -5,7 +5,22 @@ package rpc
 
 import ()
 
-type defaultHeader struct {
+type MsgPayload interface {
+	GetMsgPayloadID() uint16
+}
+
+type MsgPayloadBufferFactory interface {
+	New(uint16) MsgPayload
+
+	Marshal(MsgPayload, []byte) ([]byte, error)
+	Unmarshal(uint16, []byte) (MsgPayload, error)
+}
+
+type MsgPayloadFactory interface {
+	NewBufferFactory() MsgPayloadBufferFactory
+}
+
+type msgHeader struct {
 	payload_id     uint16
 	reserve        uint16
 	length         uint32
@@ -14,52 +29,68 @@ type defaultHeader struct {
 	checksum       uint32
 }
 
-type DefaultHeaderFactory struct{}
-
-func NewDefaultHeaderFactory() HeaderFactory {
-	hf := new(DefaultHeaderFactory)
-	return HeaderFactory(hf)
+type MsgHeaderFactory struct {
+	pf MsgPayloadFactory
 }
 
-func (hf *DefaultHeaderFactory) NewBufferFactory() HeaderBufferFactory {
-	hbf := new(defaultHeaderBufferFactory)
+func NewMsgHeaderFactory(pf MsgPayloadFactory) MsgFactory {
+	hf := new(MsgHeaderFactory)
+	hf.pf = pf
+	return MsgFactory(hf)
+}
+
+func (hf *MsgHeaderFactory) NewBufferFactory() MsgBufferFactory {
+	hbf := new(msgHeaderBufferFactory)
 
 	hbf.h.version = 1
 	hbf.hdrlen = 16
 
-	return HeaderBufferFactory(hbf)
+	hbf.pbf = hf.pf.NewBufferFactory()
+
+	return MsgBufferFactory(hbf)
 }
 
-type defaultHeaderBufferFactory struct {
-	h      defaultHeader
+type msgHeaderBufferFactory struct {
+	h      msgHeader
 	hdrlen uint32
+	pbf    MsgPayloadBufferFactory
 }
 
-func (hbf *defaultHeaderBufferFactory) GetHdrLen() uint32 {
+func (hbf *msgHeaderBufferFactory) GetHdrLen() uint32 {
 	return hbf.hdrlen
 }
 
-func (hbf *defaultHeaderBufferFactory) SetPayloadId(id uint16) {
-	hbf.h.payload_id = id
-}
-
-func (hbf *defaultHeaderBufferFactory) GetPayloadId() uint16 {
-	return hbf.h.payload_id
-}
-
-func (hbf *defaultHeaderBufferFactory) SetPayloadLen(l uint32) {
-	hbf.h.length = hbf.hdrlen + l
-	hbf.h.payload_offset = uint16(hbf.hdrlen)
-}
-
-func (hbf *defaultHeaderBufferFactory) GetPayloadLen() uint32 {
+func (hbf *msgHeaderBufferFactory) GetPayloadLen() uint32 {
 	return hbf.h.length - hbf.hdrlen
 }
 
-func (hbf *defaultHeaderBufferFactory) Marshal(b []byte) error {
+func (hbf *msgHeaderBufferFactory) MarshalPayload(p Payload, b []byte) ([]byte, error) {
+	mp, ok := p.(MsgPayload)
+	if !ok {
+		return b, nil
+	}
+
+	return hbf.pbf.Marshal(mp, b)
+}
+
+func (hbf *msgHeaderBufferFactory) UnmarshalPayload(b []byte) (Payload, error) {
+	return hbf.pbf.Unmarshal(hbf.h.payload_id, b)
+}
+
+func (hbf *msgHeaderBufferFactory) MarshalHeader(b []byte, p Payload, l uint32) error {
 	if uint32(len(b)) < hbf.hdrlen {
 		return nil
 	}
+	mp, ok := p.(MsgPayload)
+	if !ok {
+		return nil
+	}
+
+	// Set the payload_id
+	hbf.h.payload_id = mp.GetMsgPayloadID()
+	// Set payload length
+	hbf.h.length = hbf.hdrlen + l
+	hbf.h.payload_offset = uint16(hbf.hdrlen)
 
 	// TODO: employ a better pack/unpack method!
 	off := 0
@@ -94,7 +125,7 @@ func (hbf *defaultHeaderBufferFactory) Marshal(b []byte) error {
 	return nil
 }
 
-func (hbf *defaultHeaderBufferFactory) Unmarshal(b []byte) error {
+func (hbf *msgHeaderBufferFactory) UnmarshalHeader(b []byte) error {
 	var off uint32
 	if uint32(len(b)) < hbf.hdrlen {
 		return nil

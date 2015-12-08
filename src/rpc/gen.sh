@@ -29,7 +29,7 @@ EOF
 # Output the msg id
 for n in $names
 do
-	echo "\t${n}Id" >> "$outfile"
+	echo "\t${n}ID" >> "$outfile"
 done
 
 cat >>"$outfile" <<EOF
@@ -37,22 +37,22 @@ cat >>"$outfile" <<EOF
 
 type protobufFactory struct{}
 
-func NewProtobufFactory() PayloadFactory {
+func NewProtobufFactory() MsgPayloadFactory {
 	pf := new(protobufFactory)
-	return PayloadFactory(pf)
+	return MsgPayloadFactory(pf)
 }
 
 type protobufBufferFactory struct {
 	buf proto.Buffer
 }
 
-func (pf *protobufFactory) NewBufferFactory() PayloadBufferFactory {
+func (pf *protobufFactory) NewBufferFactory() MsgPayloadBufferFactory {
 	pbf := new(protobufBufferFactory)
 
-	return PayloadBufferFactory(pbf)
+	return MsgPayloadBufferFactory(pbf)
 }
 
-func (pbf *protobufBufferFactory) Marshal(p Payload, b []byte) ([]byte, error) {
+func (pbf *protobufBufferFactory) Marshal(p MsgPayload, b []byte) ([]byte, error) {
 	// Refer: github.com/golang/protobuf/proto/encode.go
 	// func Marshal(pb Message) ([]byte, error)
 	m, ok := p.(proto.Message)
@@ -71,7 +71,7 @@ func (pbf *protobufBufferFactory) Marshal(p Payload, b []byte) ([]byte, error) {
 	return pbf.buf.Bytes(), nil
 }
 
-func (pbf *protobufBufferFactory) Unmarshal(id uint16, b []byte) (Payload, error) {
+func (pbf *protobufBufferFactory) Unmarshal(id uint16, b []byte) (MsgPayload, error) {
 	p := pbf.New(id)
 	m, ok := p.(proto.Message)
 	if !ok {
@@ -87,14 +87,14 @@ func (pbf *protobufBufferFactory) Unmarshal(id uint16, b []byte) (Payload, error
 	}
 }
 
-func (pbf *protobufBufferFactory) New(id uint16) (p Payload) {
+func (pbf *protobufBufferFactory) New(id uint16) (p MsgPayload) {
 	switch id {
 EOF
 
 for n in $names
 do
 	cat >> "$outfile" << EOF
-	case ${n}Id:
+	case ${n}ID:
 		p = New${n}()
 EOF
 done
@@ -114,8 +114,8 @@ func New${n}() *${n} {
 	return new(${n})
 }
 
-func (p *${n}) GetPayloadId() uint16 {
-	return ${n}Id
+func (p *${n}) GetMsgPayloadID() uint16 {
+	return ${n}ID
 }
 EOF
 done

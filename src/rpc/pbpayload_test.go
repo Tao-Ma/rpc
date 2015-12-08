@@ -13,7 +13,7 @@ func TestProtobufFactory(t *testing.T) {
 	pbf1 := pf.NewBufferFactory()
 	b1 := make([]byte, 4096)
 
-	if ResourceReqId != 1 {
+	if ResourceReqID != 1 {
 		t.Fail()
 	}
 
@@ -26,13 +26,13 @@ func TestProtobufFactory(t *testing.T) {
 		t.FailNow()
 	}
 
-	d2, err := pbf1.Unmarshal(ResourceReqId, b3)
+	d2, err := pbf1.Unmarshal(ResourceReqID, b3)
 	if err != nil {
 		t.Log(len(b1))
 		t.FailNow()
 	}
 
-	if d1.GetPayloadId() != d2.GetPayloadId() {
+	if d1.GetMsgPayloadID() != d2.GetMsgPayloadID() {
 		t.Fail()
 	}
 
