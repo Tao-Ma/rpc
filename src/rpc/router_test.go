@@ -197,7 +197,38 @@ func BenchmarkTCPReadWriter(b *testing.B) {
 
 }
 
-func BenchmarkPipeRouter(b *testing.B) {
+func BenchmarkPipeSeperateRouter(b *testing.B) {
+	server_r, err := NewRouter(nil, ServiceProcessPayload)
+	if err != nil {
+		b.FailNow()
+	}
+	client_r, err := NewRouter(nil, ServiceProcessPayload)
+	if err != nil {
+		b.FailNow()
+	}
+
+	hf := NewDefaultHeaderFactory()
+	pf := NewProtobufFactory()
+
+	server_r.Run()
+	client_r.Run()
+	<-time.Tick(1 * time.Millisecond)
+
+	name := "scheduler"
+	n := 128
+	for i := 0; i < n; i++ {
+		c, s := net.Pipe()
+		ep_c := client_r.newRouterEndPoint(name+string(i), c, hf, pf)
+		ep_s := server_r.newRouterEndPoint("client"+string(n), s, hf, pf)
+		client_r.AddEndPoint(ep_c)
+		server_r.AddEndPoint(ep_s)
+	}
+
+	<-time.Tick(1 * time.Millisecond)
+	testSeperateRouter(b, server_r, client_r, n)
+}
+
+func BenchmarkPipeShareRouter(b *testing.B) {
 	r, err := NewRouter(nil, ServiceProcessPayload)
 	if err != nil {
 		b.FailNow()
@@ -210,7 +241,7 @@ func BenchmarkPipeRouter(b *testing.B) {
 	<-time.Tick(1 * time.Millisecond)
 
 	name := "scheduler"
-	n := 100
+	n := 128
 	for i := 0; i < n; i++ {
 		c, s := net.Pipe()
 		ep_c := r.newRouterEndPoint(name+string(i), c, hf, pf)
@@ -220,10 +251,47 @@ func BenchmarkPipeRouter(b *testing.B) {
 	}
 
 	<-time.Tick(1 * time.Millisecond)
-	testRouter(b, r, n)
+	testShareRouter(b, r, n)
 }
 
-func BenchmarkTCPRouter(b *testing.B) {
+func BenchmarkTCPSeperateRouter(b *testing.B) {
+	server_r, err := NewRouter(nil, ServiceProcessPayload)
+	if err != nil {
+		b.FailNow()
+	}
+	client_r, err := NewRouter(nil, ServiceProcessPayload)
+	if err != nil {
+		b.FailNow()
+	}
+
+	hf := NewDefaultHeaderFactory()
+	pf := NewProtobufFactory()
+
+	server_r.Run()
+	client_r.Run()
+	<-time.Tick(1 * time.Millisecond)
+
+	network := "tcp"
+	address := "localhost:10001"
+	if err := server_r.ListenAndServe("client", network, address, hf, pf, ServiceProcessConn); err != nil {
+		b.Log(err)
+		b.FailNow()
+	}
+
+	name := "scheduler"
+	n := 128
+	for i := 0; i < n; i++ {
+		if err := client_r.Dial(name+string(i), network, address, hf, pf); err != nil {
+			b.Log(err)
+			b.FailNow()
+		}
+	}
+
+	<-time.Tick(1 * time.Millisecond)
+	testSeperateRouter(b, server_r, client_r, n)
+}
+
+func BenchmarkTCPShareRouter(b *testing.B) {
 	r, err := NewRouter(nil, ServiceProcessPayload)
 	if err != nil {
 		b.FailNow()
@@ -243,7 +311,7 @@ func BenchmarkTCPRouter(b *testing.B) {
 	}
 
 	name := "scheduler"
-	n := 100
+	n := 128
 	for i := 0; i < n; i++ {
 		if err := r.Dial(name+string(i), network, address, hf, pf); err != nil {
 			b.Log(err)
@@ -252,10 +320,14 @@ func BenchmarkTCPRouter(b *testing.B) {
 	}
 
 	<-time.Tick(1 * time.Millisecond)
-	testRouter(b, r, n)
+	testShareRouter(b, r, n)
 }
 
-func testRouter(b *testing.B, r *Router, n int) {
+func testShareRouter(b *testing.B, r *Router, n int) {
+	testSeperateRouter(b, r, r, n)
+}
+
+func testSeperateRouter(b *testing.B, server_r *Router, client_r *Router, n int) {
 	name := "scheduler"
 	b.ResetTimer()
 	b.RunParallel(func(pb *testing.PB) {
@@ -263,18 +335,20 @@ func testRouter(b *testing.B, r *Router, n int) {
 			req := NewResourceReq()
 			i := rand.Intn(n)
 			//r.Call("scheduler", req, ClientProcessReponseIgnore, nil)
-			if resp := r.CallWait(name+string(i), req, 0); resp == nil {
+			if resp := client_r.CallWait(name+string(i), req, 0); resp == nil {
 				b.Log("CallWait timeout")
 				b.FailNow()
 			}
 		}
 	})
 
-	r.DelEndPoint("scheduler")
+	for i := 0; i < n; i++ {
+		client_r.DelEndPoint(name + string(i))
+		server_r.DelListener("client" + string(i))
+	}
 
-	r.DelListener("client")
-
-	r.Stop()
+	client_r.Stop()
+	server_r.Stop()
 }
 
 func BenchmarkTCPReadWrite(b *testing.B) {
