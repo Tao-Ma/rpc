@@ -6,7 +6,7 @@ tmp='./tmp'
 
 # build msg
 cd src/rpc
-./gen.sh
+./msg_gen.sh
 cd -
 
 if [ ! -e "$tmp" ]; then
