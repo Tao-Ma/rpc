@@ -10,7 +10,7 @@ import (
 
 func TestProtobufFactory(t *testing.T) {
 	pf := NewProtobufFactory()
-	pbf1 := pf.NewBufferFactory()
+	pbf1 := pf.NewBuffer()
 	b1 := make([]byte, 4096)
 
 	if ResourceReqID != 1 {

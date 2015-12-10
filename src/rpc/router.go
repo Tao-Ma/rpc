@@ -10,8 +10,46 @@ import (
 	"time"
 )
 
-type EPWrapper interface {
-	wrap(*EndPoint, Payload) Payload
+type RPCInfo interface {
+	GetRPCID() uint64
+	SetRPCID(uint64)
+	GetRPCName() string
+	SetRPCName(string)
+
+	IsRequest() bool
+	SetIsRequest()
+	IsReply() bool
+	SetIsReply()
+}
+
+type Payload interface {
+	// Raw
+}
+
+type RouteRPCPayload interface {
+	RoutePayload
+	RPCInfo
+
+	// Run inside router goroutine
+	Serve(*Router)
+	Return(*Router, RouteRPCPayload)
+}
+
+type RoutePayload interface {
+	IsRPC() bool
+	SetIsRPC()
+
+	GetEPName() string
+	SetEPName(string)
+
+	GetPayload() Payload
+	Error(error)
+	// AddStateChange api
+}
+
+type PayloadWrapper interface {
+	Wrap(Payload) RoutePayload
+	Unwrap(RoutePayload) Payload
 }
 
 type EndPoint struct {
@@ -21,16 +59,15 @@ type EndPoint struct {
 	r *Reader
 	w *Writer
 
-	in      chan Payload
-	out     chan Payload
-	wrapper EPWrapper
+	pw PayloadWrapper
 
-	hijacked bool // the endpoint is hijacked and read() is valid.
+	in  chan Payload
+	out chan Payload
 
 	logger *log.Logger
 }
 
-func NewEndPoint(name string, c net.Conn, out chan Payload, in chan Payload, wrapper EPWrapper, mf MsgFactory, logger *log.Logger) *EndPoint {
+func NewEndPoint(name string, c net.Conn, out chan Payload, in chan Payload, mf MsgFactory, pw PayloadWrapper, logger *log.Logger) *EndPoint {
 	ep := new(EndPoint)
 
 	ep.name = name
@@ -38,17 +75,13 @@ func NewEndPoint(name string, c net.Conn, out chan Payload, in chan Payload, wra
 
 	ep.in = in
 	ep.out = out
-	if ep.in != ep.out {
-		// FIXME: not good ?
-		ep.hijacked = true
-	}
+
+	ep.pw = pw
 
 	ep.logger = logger
 
-	ep.wrapper = wrapper
-
-	ep.w = NewWriter(c, out, mf, logger)
-	ep.r = NewReader(c, in, ep, mf, logger)
+	ep.w = NewWriter(c, ep, mf.NewBuffer(), logger)
+	ep.r = NewReader(c, ep, mf.NewBuffer(), logger)
 
 	return ep
 }
@@ -68,44 +101,70 @@ func (ep *EndPoint) Close() {
 	ep.conn.Close()
 }
 
-type msg struct {
-	name string
-	ep   *EndPoint
-	p    Payload
-
-	r      RpcMsg
-	isresp bool
+func (ep *EndPoint) In() chan Payload {
+	return ep.in
 }
 
-func (ep *EndPoint) wrap(p Payload) Payload {
-	if ep.wrapper != nil {
-		return ep.wrapper.wrap(ep, p)
+func (ep *EndPoint) Out() chan Payload {
+	return ep.out
+}
+
+func (ep *EndPoint) Wrap(p Payload) Payload {
+	if ep.pw == nil {
+		return p
 	}
+
+	rp := ep.pw.Wrap(p)
+	rp.SetEPName(ep.name)
+	return Payload(rp)
+}
+
+func (ep *EndPoint) Unwrap(p Payload) Payload {
+	if ep.pw == nil {
+		return p
+	}
+
+	if rp, ok := p.(RoutePayload); ok {
+		return ep.pw.Unwrap(rp)
+	}
+
+	// XXX: should not happen?
 	return p
 }
 
-func (r *Router) wrap(ep *EndPoint, p Payload) Payload {
-	var m *msg
+func (r *Router) Wrap(p Payload) RoutePayload {
+	var in *routeMsg
 	select {
-	case m = <-r.msgs:
+	case in = <-r.inMsgs:
 	default:
-		m = new(msg)
+		in = new(routeMsg)
 	}
 
-	m.name = ep.name
-	m.ep = ep
-	m.p = p
+	in.Reset()
+	in.p = p
 
-	if rm, ok := p.(RpcMsg); ok {
-		m.r = rm
-		m.isresp = rm.RpcIsResponse()
-	}
-
-	return m
+	return in
 }
 
-func (ep *EndPoint) write(p Payload) error {
-	return ep.w.Write(p)
+func (r *Router) Unwrap(p RoutePayload) Payload {
+	if m, ok := p.(*routeMsg); ok {
+		if !m.IsRPC() {
+			select {
+			// TODO: pretect the channle?
+			// TODO: prevent the resource leak?
+			case r.outMsgs <- m:
+			default:
+			}
+		}
+		return m.p
+	}
+
+	// XXX: error?
+	return p
+}
+
+func (ep *EndPoint) write(p RoutePayload) error {
+	return ep.w.Write(p.(Payload))
 }
 
 type Listener struct {
@@ -181,15 +240,9 @@ func (l *Listener) accepter(r chan bool) {
 	}
 }
 
-type RpcMsg interface {
-	RpcGetId() uint64
-	RpcSetId(uint64)
-	RpcIsRequest() bool
-	RpcIsResponse() bool
-}
-
-type rpc_callback func(Payload, rpc_arg, error)
-type rpc_arg interface{}
+// serve
+type callback_func func(Payload, callback_arg, error)
+type callback_arg interface{}
 
 type waiter struct {
 	ch chan Payload
@@ -197,18 +250,134 @@ type waiter struct {
 	r *Router
 }
 
-type rpc struct {
+type routeMsg struct {
 	id uint64
 
-	name string
-	ep   *EndPoint
+	ep_name    string
+	rpc        string
+	is_rpc     bool
+	is_request bool
 
-	p     Payload
-	r     RpcMsg
-	isreq bool
+	p Payload
 
-	cb  rpc_callback
-	arg rpc_arg
+	cb  callback_func
+	arg callback_arg
+}
+
+func (rm *routeMsg) Reset() {
+	rm.id = 0
+	rm.ep_name = ""
+	rm.rpc = ""
+	rm.is_rpc = false
+	rm.is_request = false
+	rm.p = nil
+	rm.cb = nil
+	rm.arg = nil
+}
+
+func (rm *routeMsg) GetEPName() string {
+	return rm.ep_name
+}
+
+func (rm *routeMsg) SetEPName(name string) {
+	rm.ep_name = name
+}
+
+func (rm *routeMsg) GetPayload() Payload {
+	return rm.p
+}
+
+func (rm *routeMsg) IsRPC() bool {
+	return rm.is_rpc
+}
+
+func (rm *routeMsg) SetIsRPC() {
+	rm.is_rpc = true
+}
+
+func (rm *routeMsg) IsRequest() bool {
+	return rm.is_request
+}
+
+func (rm *routeMsg) SetIsRequest() {
+	rm.is_request = true
+}
+
+func (rm *routeMsg) IsReply() bool {
+	return !rm.is_request
+}
+
+func (rm *routeMsg) SetIsReply() {
+	rm.is_request = false
+}
+
+func (rm *routeMsg) GetRPCID() uint64 {
+	return rm.id
+}
+
+func (rm *routeMsg) SetRPCID(id uint64) {
+	rm.id = id
+}
+
+func (rm *routeMsg) GetRPCName() string {
+	return rm.rpc
+}
+
+func (rm *routeMsg) SetRPCName(rpc string) {
+	rm.rpc = rpc
+}
+
+func (rm *routeMsg) Error(err error) {
+	// TODO: router?
+	go rm.cb(nil, rm.arg, nil)
+}
+
+// mock
+func serve_done(p Payload, arg callback_arg, err error) {
+	// Reclaim
+}
+
+func (rm *routeMsg) Serve(r *Router) {
+	// TODO: Get the serve info
+	// rm.rpc is used to locate method
+
+	reply := r.serve(r, rm.ep_name, rm.p)
+
+	var out *routeMsg
+	select {
+	case out = <-r.outMsgs:
+	default:
+		out = new(routeMsg)
+	}
+
+	out.ep_name = rm.ep_name
+	out.rpc = rm.rpc
+	out.id = rm.id
+
+	out.p = reply
+
+	out.is_rpc = true
+	out.is_request = false
+
+	out.cb = serve_done
+
+	select {
+	case r.out <- out:
+	default:
+		select {
+		case r.out <- out:
+		case <-time.After(5):
+			// TODO:
+		}
+	}
+}
+
+func (rm *routeMsg) Return(r *Router, reply RouteRPCPayload) {
+	go rm.cb(reply.GetPayload(), rm.arg, nil)
+	select {
+	case r.outMsgs <- rm:
+	default:
+	}
 }
 
 type Router struct {
@@ -217,20 +386,20 @@ type Router struct {
 	nmap map[string]*EndPoint // used to find passive server
 	lmap map[string]*Listener // Service name
 
-	l_in   chan *Listener
+	l_in   chan *Listener // read by Router
 	l_out  chan string
-	ep_in  chan *EndPoint
+	ep_in  chan *EndPoint // read by Router
 	ep_out chan string
 
-	out chan *rpc
-	in  chan Payload
+	out chan Payload // read by Router
+	in  chan Payload // read by Router
 
 	next  uint64
-	calls map[uint64]*rpc
+	calls map[uint64]RouteRPCPayload
 
-	waiters chan *waiter
-	rpcs    chan *rpc
-	msgs    chan *msg
+	waiters chan *waiter   // TODO: move out of Router
+	outMsgs chan *routeMsg // read by Router
+	inMsgs  chan *routeMsg // write by Router
 
 	serve ServePayload
 
@@ -256,16 +425,16 @@ func NewRouter(logger *log.Logger, serve ServePayload) (*Router, error) {
 	r.ep_in = make(chan *EndPoint, 32)
 	r.ep_out = make(chan string, 128)
 
-	n := 1024 * 5
-	r.in = make(chan Payload, n)
-	r.out = make(chan *rpc, n)
+	n := 1024
+	r.in = make(chan Payload, n*4)
+	r.out = make(chan Payload, n)
 
-	r.calls = make(map[uint64]*rpc)
+	r.calls = make(map[uint64]RouteRPCPayload)
 	r.next = 1
 
 	r.waiters = make(chan *waiter, n)
-	r.rpcs = make(chan *rpc, n)
-	r.msgs = make(chan *msg, n)
+	r.outMsgs = make(chan *routeMsg, n)
+	r.inMsgs = make(chan *routeMsg, n)
 
 	r.serve = serve
 
@@ -300,17 +469,17 @@ func channelTimeoutWait(ch chan interface{}, v interface{}, timeout time.Duratio
 	default:
 		select {
 		case ch <- v:
-		case <-time.Tick(timeout):
+		case <-time.After(timeout):
 		}
 
 	}
 }
 
-// calldone is a helper to notify sync CallWait()
-func calldone(p Payload, arg rpc_arg, err error) {
+// call_done is a helper to notify sync CallWait()
+func call_done(p Payload, arg callback_arg, err error) {
 	// TODO: timeout case may crash? Take care of the race condition!
 	if w, ok := arg.(*waiter); !ok {
-		panic("calldone")
+		panic("call_done")
 	} else if err != nil {
 		// TODO: error ?
 		w.ch <- nil
@@ -320,7 +489,7 @@ func calldone(p Payload, arg rpc_arg, err error) {
 }
 
 // Call sync
-func (r *Router) CallWait(name string, p Payload, n time.Duration) Payload {
+func (r *Router) CallWait(ep string, rpc string, p Payload, n time.Duration) Payload {
 	var (
 		w      *waiter
 		result Payload
@@ -334,7 +503,7 @@ func (r *Router) CallWait(name string, p Payload, n time.Duration) Payload {
 		w.r = r
 	}
 
-	r.Call(name, p, calldone, w)
+	r.Call(ep, rpc, p, call_done, w)
 
 	// Wait result
 	select {
@@ -352,6 +521,7 @@ func (r *Router) CallWait(name string, p Payload, n time.Duration) Payload {
 		default:
 		}
 	} else {
+		// timeout?
 		// TODO: w & w.ch leak!
 	}
 
@@ -359,53 +529,54 @@ func (r *Router) CallWait(name string, p Payload, n time.Duration) Payload {
 }
 
 // Call async
-func (r *Router) Call(name string, p Payload, cb rpc_callback, arg rpc_arg) {
-	var c *rpc
+func (r *Router) Call(ep string, rpc string, p Payload, cb callback_func, arg callback_arg) {
+	var out *routeMsg
+
 	select {
-	case c = <-r.rpcs:
+	case out = <-r.outMsgs:
 	default:
-		c = new(rpc)
+		out = new(routeMsg)
 	}
 
-	c.name = name
-	c.cb = cb
-	c.arg = arg
-	c.p = p
-	if m, ok := c.p.(RpcMsg); ok {
-		c.r = m
-		c.isreq = m.RpcIsRequest()
+	out.ep_name = ep
+	out.rpc = rpc
+
+	// Locate service name
+	if rpc != "" {
+		out.is_rpc = true
+		out.is_request = true
 	}
+
+	out.p = p
+
+	out.cb = cb
+	out.arg = arg
 
 	select {
-	case r.out <- c:
+	case r.out <- out:
 	default:
 		select {
-		case r.out <- c:
+		case r.out <- out:
 		case <-time.Tick(0):
 			// TODO: timeout!
+			// TODO: RouteRPCPayload
 			go cb(nil, arg, nil)
 		}
 	}
 }
 
-func (r *Router) Write(name string, p Payload) {
-	r.Call(name, p, nil, nil)
-}
-
-// call internal
-func (r *Router) write(ep *EndPoint, p Payload) {
-	_ = ep.write(p)
+func (r *Router) Write(ep string, p Payload) {
+	r.Call(ep, "", p, nil, nil)
 }
 
 // route()/hijack()
 type ServeConn func(*Router, net.Conn) bool
-type ServePayload func(*Router, string, Payload) bool
 
-type RouteOut func(*Router, Payload)
-type RouteIn func(*Router, Payload)
+// FIXME: Payload -> bool
+type ServePayload func(*Router, string, Payload) Payload
 
 func (r *Router) newRouterEndPoint(name string, c net.Conn, mf MsgFactory) *EndPoint {
-	return NewEndPoint(name, c, make(chan Payload, 1024), r.in, r, mf, r.logger)
+	return NewEndPoint(name, c, make(chan Payload, 1024), r.in, mf, r, r.logger)
 }
 
 func (r *Router) newHijackedEndPoint(name string, c net.Conn, mf MsgFactory, logger *log.Logger) *EndPoint {
@@ -562,69 +733,77 @@ forever:
 			if l := r.delListener(n); l != nil {
 				l.Close()
 			}
-		case c := <-r.out:
+		case p := <-r.out:
 			//r.logger.Printf("router: %v send: %T:%v", r, c.p, c.p)
-			// new payload read from api
-			r.RpcOut(c)
-			// TODO: route
-			if ep, exist := r.nmap[c.name]; exist {
+			out := p.(RoutePayload)
+
+			if out.IsRPC() {
+				r.RpcOut(out.(RouteRPCPayload))
+			}
+
+			// TODO: apply route rule
+
+			if ep, exist := r.nmap[out.GetEPName()]; exist {
 				//r.logger.Printf("router: %v rpcout: %T:%v", r, c.p, c.p)
-				go r.write(ep, c.p)
+				go ep.write(out)
 			} else {
 				// race condition: Dial() is later than Call()
-				go c.cb(nil, c.arg, nil)
+				go out.Error(nil)
 			}
 		case p := <-r.in:
 			//r.logger.Printf("router: %v recv: %T:%v", r, p, p)
-			if m, ok := p.(*msg); !ok {
-			} else {
-				// TODO: route
-				// new payload read from endpoint
-				if c := r.RpcIn(m); c == nil {
-					// TODO: not a rpc or rpc timeout/cancel
-					go r.serve(r, m.name, m.p)
+			in := p.(RoutePayload)
+
+			// TODO: apply route rule
+
+			if in.IsRPC() {
+				if in.(RouteRPCPayload).IsRequest() {
+					// rpc request
+					in.(RouteRPCPayload).Serve(r)
+				} else if out := r.RpcIn(in.(RouteRPCPayload)); out != nil {
+					// rpc reply
+					out.Return(r, in.(RouteRPCPayload))
 				} else {
-					go c.cb(m.p, c.arg, nil)
-					select {
-					case r.rpcs <- c:
-					default:
-					}
+					// TODO: rpc timeout/cancel
 				}
-				select {
-				case r.msgs <- m:
-				default:
-				}
+			} else {
+				// TODO: msg
+				go r.serve(r, in.GetEPName(), in.GetPayload())
+			}
+
+			select {
+			case r.inMsgs <- in.(*routeMsg):
+			default:
 			}
 		}
 	}
 }
 
-func (r *Router) RpcOut(c *rpc) {
-	if c.r == nil || !c.isreq {
+func (r *Router) RpcOut(out RouteRPCPayload) {
+	if !out.IsRequest() {
 		return
 	}
 
-	c.id = r.next
+	out.SetRPCID(r.next)
 	r.next++
-	if _, exist := r.calls[c.id]; exist {
+	if _, exist := r.calls[out.GetRPCID()]; exist {
 		panic("RpcOut id duplicate")
 	} else {
-		r.calls[c.id] = c
-		c.r.RpcSetId(c.id)
+		r.calls[out.GetRPCID()] = out
 	}
 }
 
-func (r *Router) RpcIn(m *msg) *rpc {
-	if m.r == nil || !m.isresp {
+func (r *Router) RpcIn(in RouteRPCPayload) RouteRPCPayload {
+	if !in.IsReply() {
 		return nil
 	}
 
-	id := m.r.RpcGetId()
-	if c, exist := r.calls[id]; !exist {
+	id := in.GetRPCID()
+	if out, exist := r.calls[id]; !exist {
 		// timeout or cancel, the callback should be called.
 		return nil
 	} else {
-		return c
+		return out
 	}
 }
 

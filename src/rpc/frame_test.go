@@ -10,21 +10,29 @@ import (
 	"time"
 )
 
-type TestWrapper struct{}
+type chanPayload chan Payload
 
-func (tw *TestWrapper) wrap(p Payload) Payload {
+func (io chanPayload) In() chan Payload {
+	return io
+}
+func (io chanPayload) Out() chan Payload {
+	return io
+}
+func (io chanPayload) Wrap(p Payload) Payload {
+	return p
+}
+func (io chanPayload) Unwrap(p Payload) Payload {
 	return p
 }
 
 func TestMockMsg(t *testing.T) {
 	pr, pw := io.Pipe()
-	ch := make(chan Payload)
-	tw := &TestWrapper{}
+	ch := make(chanPayload)
 
 	hf := NewMsgHeaderFactory(NewProtobufFactory())
 
-	w := NewWriter(pw, ch, hf, nil)
-	r := NewReader(pr, ch, tw, hf, nil)
+	w := NewWriter(pw, ch, hf.NewBuffer(), nil)
+	r := NewReader(pr, ch, hf.NewBuffer(), nil)
 
 	w.Run()
 	r.Run()
@@ -36,13 +44,17 @@ func TestMockMsg(t *testing.T) {
 	case <-time.Tick(time.Second):
 	}
 
-	resp := <-ch
-
-	if resp.(*ResourceReq).GetId() != 10000 {
-		t.Log(req, resp)
-		t.Fail()
+	select {
+	case resp := <-ch:
+		if resp.(*ResourceReq).GetId() != 10000 {
+			t.Log(req, resp)
+			t.Fail()
+		}
+	case <-time.After(1 * time.Second):
+		t.Log("timeout")
+		t.FailNow()
 	}
 
-	w.Stop()
 	r.Stop()
+	w.Stop()
 }

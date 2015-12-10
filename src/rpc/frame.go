@@ -10,22 +10,49 @@ import (
 	"time"
 )
 
-type Payload interface{}
+// IOChannel
+type IOChannel interface {
+	In() chan Payload
+	Out() chan Payload
 
-type ReaderWrapper interface {
-	wrap(Payload) Payload
+	// Support decorate data
+	Unwrap(Payload) Payload
+	Wrap(Payload) Payload
 }
+
+/*
+type Encoder interface {
+	GetHdrLen() uint32
+	GetPayloadLen() uint32
+
+	MarshalHeader([]byte, Payload, uint32) error
+	MarshalPayload(Payload, []byte) ([]byte, error)
+}
+
+type Decoder interface {
+	GetHdrLen() uint32
+	GetPayloadLen() uint32
+
+	UnmarshalHeader([]byte) error
+	UnmarshalPayload([]byte) (Payload, error)
+}
+*/
 
 type MsgFactory interface {
-	NewBufferFactory() MsgBufferFactory
+	NewBuffer() MsgBuffer
 }
 
-type MsgBufferFactory interface {
+type MsgBuffer interface {
+	Reset()
+
 	MarshalHeader([]byte, Payload, uint32) error
 	UnmarshalHeader([]byte) error
 
 	MarshalPayload(Payload, []byte) ([]byte, error)
 	UnmarshalPayload([]byte) (Payload, error)
+
+	SetPayloadInfo(Payload)
+	GetPayloadInfo(Payload)
 
 	GetHdrLen() uint32
 	GetPayloadLen() uint32
@@ -93,10 +120,10 @@ type Writer struct {
 	bg *BackgroudService
 
 	conn io.Writer
-	mbf  MsgBufferFactory
+	mb   MsgBuffer
 	err  error
 
-	out chan Payload
+	io IOChannel
 
 	maxlen uint32
 	b      []byte
@@ -104,7 +131,7 @@ type Writer struct {
 	logger *log.Logger
 }
 
-func NewWriter(conn io.Writer, out chan Payload, mf MsgFactory, logger *log.Logger) *Writer {
+func NewWriter(conn io.Writer, io IOChannel, mb MsgBuffer, logger *log.Logger) *Writer {
 	w := new(Writer)
 
 	if bg, err := NewBackgroundService(w); err != nil {
@@ -114,12 +141,12 @@ func NewWriter(conn io.Writer, out chan Payload, mf MsgFactory, logger *log.Logg
 	}
 
 	w.conn = conn
-	w.mbf = mf.NewBufferFactory()
+	w.mb = mb
 
-	w.out = out
+	w.io = io
 
 	w.maxlen = 4096
-	w.b = make([]byte, w.mbf.GetHdrLen()+w.maxlen)
+	w.b = make([]byte, w.mb.GetHdrLen()+w.maxlen)
 
 	if logger == nil {
 		w.logger = log.New(os.Stderr, "", log.LstdFlags)
@@ -139,11 +166,14 @@ func (w *Writer) Stop() {
 }
 
 func (w *Writer) Write(p Payload) error {
+	// TODO: get token
+	// Detect channel closed by nil
+
 	select {
-	case w.out <- p:
+	case w.io.Out() <- p:
 	default:
 		select {
-		case w.out <- p:
+		case w.io.Out() <- p:
 		case <-time.Tick(0 * time.Second):
 			// TODO: timeout
 			return nil
@@ -154,13 +184,18 @@ func (w *Writer) Write(p Payload) error {
 }
 
 func (w *Writer) write(p Payload) ([]byte, error) {
-	pb, err := w.mbf.MarshalPayload(p, w.b[w.mbf.GetHdrLen():w.mbf.GetHdrLen()])
+	w.mb.Reset()
+
+	w.mb.SetPayloadInfo(p)
+	p = w.io.Unwrap(p)
+
+	pb, err := w.mb.MarshalPayload(p, w.b[w.mb.GetHdrLen():w.mb.GetHdrLen()])
 	if err != nil {
 		return nil, err
 	}
 
-	hb := w.b[0:w.mbf.GetHdrLen()]
-	if err := w.mbf.MarshalHeader(hb, p, uint32(len(pb))); err != nil {
+	hb := w.b[0:w.mb.GetHdrLen()]
+	if err := w.mb.MarshalHeader(hb, p, uint32(len(pb))); err != nil {
 		return nil, err
 	}
 
@@ -177,10 +212,11 @@ forever:
 		select {
 		case <-q:
 			break forever
-		case p := <-w.out:
+		case p := <-w.io.Out():
 			// TODO: timeout or error?
 			if b, err := w.write(p); err != nil {
 				// TODO: error?
+				panic(err)
 			} else if _, err := w.conn.Write(b); err != nil {
 				w.err = err
 				// TODO: stop the writer?
@@ -194,11 +230,10 @@ type Reader struct {
 	bg *BackgroudService
 
 	conn io.Reader
-	mbf  MsgBufferFactory
+	mb   MsgBuffer
 	err  error
 
-	in      chan Payload
-	wrapper ReaderWrapper
+	io IOChannel
 
 	maxlen uint32
 	b      []byte
@@ -206,12 +241,8 @@ type Reader struct {
 	logger *log.Logger
 }
 
-func NewReader(conn io.Reader, in chan Payload, wrapper ReaderWrapper, mf MsgFactory, logger *log.Logger) *Reader {
+func NewReader(conn io.Reader, io IOChannel, mb MsgBuffer, logger *log.Logger) *Reader {
 	r := new(Reader)
-
-	if wrapper == nil {
-		return nil
-	}
 
 	if bg, err := NewBackgroundService(r); err != nil {
 		return nil
@@ -220,13 +251,12 @@ func NewReader(conn io.Reader, in chan Payload, wrapper ReaderWrapper, mf MsgFac
 	}
 
 	r.conn = conn
-	r.mbf = mf.NewBufferFactory()
+	r.mb = mb
 	r.maxlen = 4096
 
-	r.in = in
-	r.wrapper = wrapper
+	r.io = io
 
-	r.b = make([]byte, r.maxlen+r.mbf.GetHdrLen())
+	r.b = make([]byte, r.maxlen+r.mb.GetHdrLen())
 
 	if logger == nil {
 		r.logger = log.New(os.Stderr, "", log.LstdFlags)
@@ -255,7 +285,7 @@ forever:
 			break forever
 		} else {
 			select {
-			case r.in <- r.wrapper.wrap(p):
+			case r.io.In() <- p:
 			case <-q:
 				// TODO: cleanup
 				break forever
@@ -266,18 +296,19 @@ forever:
 
 //Try to read a whole msg.
 func (r *Reader) read() (Payload, error) {
-	hb := r.b[0:r.mbf.GetHdrLen()]
+	r.mb.Reset()
+	hb := r.b[0:r.mb.GetHdrLen()]
 	// TODO: Read() interrupt?
 	if _, err := r.conn.Read(hb); err != nil {
 		return nil, err
 	}
 
-	if err := r.mbf.UnmarshalHeader(hb); err != nil {
+	if err := r.mb.UnmarshalHeader(hb); err != nil {
 		return nil, err
 	}
 
-	plen := r.mbf.GetPayloadLen()
-	pb := r.b[r.mbf.GetHdrLen() : r.mbf.GetHdrLen()+plen]
+	plen := r.mb.GetPayloadLen()
+	pb := r.b[r.mb.GetHdrLen() : r.mb.GetHdrLen()+plen]
 	// Support header-only message(udp or no payload at all).
 	if plen > 0 {
 		// TODO: enlarge b []byte if plen > r.maxlen or error out.
@@ -288,10 +319,16 @@ func (r *Reader) read() (Payload, error) {
 		}
 	}
 
-	p, err := r.mbf.UnmarshalPayload(pb)
+	p, err := r.mb.UnmarshalPayload(pb)
 	if err != nil {
 		return nil, err
 	}
+	if p == nil {
+		panic("unmarshal failed")
+	}
+
+	p = r.io.Wrap(p)
+	r.mb.GetPayloadInfo(p)
 
 	return p, nil
 }

@@ -11,60 +11,26 @@ import (
 	"time"
 )
 
-func (r *ResourceReq) RpcGetId() uint64 {
-	return r.GetId()
-}
-
-func (r *ResourceReq) RpcSetId(id uint64) {
-	r.Id = proto.Uint64(id)
-}
-
-func (r *ResourceReq) RpcIsRequest() bool {
-	return true
-}
-
-func (r *ResourceReq) RpcIsResponse() bool {
-	return false
-}
-
-func (r *ResourceResp) RpcGetId() uint64 {
-	return r.GetId()
-}
-
-func (r *ResourceResp) RpcSetId(id uint64) {
-	r.Id = proto.Uint64(id)
-}
-
-func (r *ResourceResp) RpcIsRequest() bool {
-	return false
-}
-
-func (r *ResourceResp) RpcIsResponse() bool {
-	return true
-}
-
 func ServiceProcessConn(r *Router, c net.Conn) bool {
 	return false
 }
 
-func ServiceProcessPayload(r *Router, name string, p Payload) bool {
+func ServiceProcessPayload(r *Router, name string, p Payload) Payload {
 	resp := NewResourceResp()
 	req := p.(*ResourceReq)
 	resp.Id = proto.Uint64(req.GetId())
-
-	r.Write(name, resp)
-	return true
+	return resp
 }
 
-func ClientProcessReponse(p Payload, arg rpc_arg, err error) {
+func ClientProcessReponse(p Payload, arg callback_arg, err error) {
 	done := arg.(chan bool)
 	done <- true
 }
 
-func ClientProcessReponseIgnore(p Payload, arg rpc_arg, err error) {
+func ClientProcessReponseIgnore(p Payload, arg callback_arg, err error) {
 }
 
-func TestRouter(t *testing.T) {
+func TestRouterSingle(t *testing.T) {
 	r, err := NewRouter(nil, ServiceProcessPayload)
 	if err != nil {
 		t.FailNow()
@@ -88,13 +54,10 @@ func TestRouter(t *testing.T) {
 	}
 
 	req := NewResourceReq()
-	//	if resp := r.CallWait(name, req, 0); resp == nil {
-	//t.Log("CallWait timeout")
-	//t.FailNow()
-	//	}
+	req.Id = proto.Uint64(1)
 
 	done := make(chan bool)
-	r.Call("scheduler", req, ClientProcessReponse, done)
+	r.Call("scheduler", "rpc", req, ClientProcessReponse, done)
 	<-done
 
 	r.DelEndPoint("scheduler")
@@ -104,38 +67,80 @@ func TestRouter(t *testing.T) {
 	r.Stop()
 }
 
-func TestReadWriter(t *testing.T) {
-	s, c := net.Pipe()
-
-	ch_c_w := make(chan Payload, 1024)
-	ch_s_w := make(chan Payload, 1024)
-	ch_d := make(chan Payload, 1024)
+func TestRouterMultiple(t *testing.T) {
+	r, err := NewRouter(nil, ServiceProcessPayload)
+	if err != nil {
+		t.FailNow()
+	}
 
 	hf := NewMsgHeaderFactory(NewProtobufFactory())
 
-	ep_c := NewEndPoint("c", c, ch_c_w, ch_d, nil, hf, nil)
-	ep_s := NewEndPoint("s", s, ch_s_w, ch_s_w, nil, hf, nil)
+	name := "scheduler"
+	network := "tcp"
+	address := "localhost:10000"
+
+	r.Run()
+
+	if err := r.ListenAndServe("client", network, address, hf, ServiceProcessConn); err != nil {
+		t.Log(err)
+		t.FailNow()
+	}
+	if err := r.Dial(name, network, address, hf); err != nil {
+		t.Log(err)
+		t.FailNow()
+	}
+
+	for i := 1; i < 10000; i++ {
+		req := NewResourceReq()
+		req.Id = proto.Uint64(uint64(i))
+		if resp := r.CallWait(name, "rpc", req, 5); resp == nil {
+			t.Log("CallWait timeout: ", i)
+			t.FailNow()
+		}
+	}
+
+	r.DelEndPoint("scheduler")
+
+	r.DelListener("client")
+
+	r.Stop()
+}
+
+/*
+func TestReadWriter(t *testing.T) {
+	s, c := net.Pipe()
+
+	ch_c_w := make(chanPayload, 1024)
+	ch_s_w := make(chanPayload, 1024)
+	ch_d := make(chanPayload, 1024)
+
+	hf := NewMsgHeaderFactory(NewProtobufFactory())
+
+	ep_c := NewEndPoint("c", c, ch_c_w, ch_d, hf, nil, nil)
+	ep_s := NewEndPoint("s", s, ch_s_w, ch_s_w, hf, nil, nil)
 
 	ep_c.Run()
 	ep_s.Run()
 
 	req := NewResourceReq()
 	req.Id = proto.Uint64(1)
+
 	ep_c.write(req)
 	<-ch_d
 }
+*/
 
 func BenchmarkPipeReadWriter(b *testing.B) {
 	s, c := net.Pipe()
 
-	ch_c_w := make(chan Payload, 1024)
-	ch_s_w := make(chan Payload, 1024)
-	ch_d := make(chan Payload, 1024)
+	ch_c_w := make(chanPayload, 1024)
+	ch_s_w := make(chanPayload, 1024)
+	ch_d := make(chanPayload, 1024)
 
 	hf := NewMsgHeaderFactory(NewProtobufFactory())
 
-	ep_c := NewEndPoint("c", c, ch_c_w, ch_d, nil, hf, nil)
-	ep_s := NewEndPoint("s", s, ch_s_w, ch_s_w, nil, hf, nil)
+	ep_c := NewEndPoint("c", c, ch_c_w, ch_d, hf, nil, nil)
+	ep_s := NewEndPoint("s", s, ch_s_w, ch_s_w, hf, nil, nil)
 
 	ep_c.Run()
 	ep_s.Run()
@@ -169,14 +174,14 @@ func BenchmarkTCPReadWriter(b *testing.B) {
 		b.FailNow()
 	}
 
-	ch_c_w := make(chan Payload, 1024)
-	ch_s_w := make(chan Payload, 1024)
-	ch_d := make(chan Payload, 1024)
+	ch_c_w := make(chanPayload, 1024)
+	ch_s_w := make(chanPayload, 1024)
+	ch_d := make(chanPayload, 1024)
 
 	hf := NewMsgHeaderFactory(NewProtobufFactory())
 
-	ep_c := NewEndPoint("c", c, ch_c_w, ch_d, nil, hf, nil)
-	ep_s := NewEndPoint("s", s, ch_s_w, ch_s_w, nil, hf, nil)
+	ep_c := NewEndPoint("c", c, ch_c_w, ch_d, hf, nil, nil)
+	ep_s := NewEndPoint("s", s, ch_s_w, ch_s_w, hf, nil, nil)
 
 	ep_c.Run()
 	ep_s.Run()
@@ -210,7 +215,7 @@ func BenchmarkPipeSeperateRouter(b *testing.B) {
 	<-time.Tick(1 * time.Millisecond)
 
 	name := "scheduler"
-	n := 128
+	n := 1
 	for i := 0; i < n; i++ {
 		c, s := net.Pipe()
 		ep_c := client_r.newRouterEndPoint(name+string(i), c, hf)
@@ -235,7 +240,7 @@ func BenchmarkPipeShareRouter(b *testing.B) {
 	<-time.Tick(1 * time.Millisecond)
 
 	name := "scheduler"
-	n := 128
+	n := 1
 	for i := 0; i < n; i++ {
 		c, s := net.Pipe()
 		ep_c := r.newRouterEndPoint(name+string(i), c, hf)
@@ -272,7 +277,7 @@ func BenchmarkTCPSeperateRouter(b *testing.B) {
 	}
 
 	name := "scheduler"
-	n := 128
+	n := 1
 	for i := 0; i < n; i++ {
 		if err := client_r.Dial(name+string(i), network, address, hf); err != nil {
 			b.Log(err)
@@ -303,7 +308,7 @@ func BenchmarkTCPShareRouter(b *testing.B) {
 	}
 
 	name := "scheduler"
-	n := 128
+	n := 1
 	for i := 0; i < n; i++ {
 		if err := r.Dial(name+string(i), network, address, hf); err != nil {
 			b.Log(err)
@@ -325,9 +330,10 @@ func testSeperateRouter(b *testing.B, server_r *Router, client_r *Router, n int)
 	b.RunParallel(func(pb *testing.PB) {
 		for pb.Next() {
 			req := NewResourceReq()
+			req.Id = proto.Uint64(1)
 			i := rand.Intn(n)
 			//r.Call("scheduler", req, ClientProcessReponseIgnore, nil)
-			if resp := client_r.CallWait(name+string(i), req, 0); resp == nil {
+			if resp := client_r.CallWait(name+string(i), "rpc", req, 5); resp == nil {
 				b.Log("CallWait timeout")
 				b.FailNow()
 			}
