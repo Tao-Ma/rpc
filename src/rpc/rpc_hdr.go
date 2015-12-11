@@ -2,34 +2,32 @@ package rpc
 
 import ()
 
-// RPCPayload
-type RPCPayload interface {
-	GetRPCPayloadName() string
-}
-
 type RPCPayloadBuffer interface {
-	Marshal(RPCPayload, []byte) ([]byte, error)
-	Unmarshal(string, []byte) (RPCPayload, error)
+	Marshal(Payload, []byte) ([]byte, error)
+	Unmarshal(string, []byte) (Payload, error)
 }
 
 type RPCPayloadFactory interface {
 	NewBuffer() RPCPayloadBuffer
 }
 
+const (
+	RPC_RPC = 1 << iota
+	RPC_REQUEST
+)
+
 // RPCHeader
 type rpcHeader struct {
-	length           uint32
-	rpcid            uint64
-	version          uint16
-	rpc_name_len     uint16
-	payload_name_len uint16
-	payload_offset   uint16
-	checksum         uint32
-	flags            uint16
+	length         uint32
+	rpcid          uint64
+	version        uint16
+	flags          uint16
+	rpc_name_len   uint16
+	payload_offset uint16
+	checksum       uint32
 
 	/* variable part */
-	rpc_name     string
-	payload_name string
+	rpc_name string
 }
 
 type RPCHeaderFactory struct {
@@ -63,30 +61,30 @@ func (hb *rpcHeaderBuffer) GetHdrLen() uint32 {
 	return hb.hdrlen
 }
 
-/* The rpc_name and payload_name stores at the beginning of payload. */
+/* The rpc_name stores at the beginning of payload. */
 func (hb *rpcHeaderBuffer) GetPayloadLen() uint32 {
-	return hb.h.length - hb.hdrlen
+	return hb.h.length - (hb.hdrlen + uint32(hb.h.rpc_name_len))
 }
 
 func (hb *rpcHeaderBuffer) MarshalPayload(p Payload, b []byte) ([]byte, error) {
-	rp, ok := p.(RPCPayload)
-	if !ok {
-		return b, nil
-	}
-
-	if b, err := hb.marshalHeaderVariable(b); err != nil {
+	if vb, err := hb.marshalHeaderVariable(b); err != nil {
+		return nil, err
+	} else if pb, err := hb.b.Marshal(p, b); err != nil {
 		return nil, err
 	} else {
-		return hb.b.Marshal(rp, b)
+		return b[0 : len(vb)+len(pb)], nil
 	}
 }
 
 func (hb *rpcHeaderBuffer) UnmarshalPayload(b []byte) (Payload, error) {
-	if b, err := hb.unmarshalHeaderVariable(b); err != nil {
+	if pb, err := hb.unmarshalHeaderVariable(b); err != nil {
 		return nil, err
 	} else {
-
-		return hb.b.Unmarshal(hb.h.payload_name, b)
+		// copy this to upper level, performance hurt.
+		nb := make([]byte, len(pb))
+		copy(nb, pb)
+		return nb, nil
+		//return hb.b.Unmarshal(hb.h.rpc_name, b)
 	}
 }
 
@@ -96,11 +94,11 @@ func (hb *rpcHeaderBuffer) SetPayloadInfo(p Payload) {
 	} else if !rp.IsRPC() {
 		return
 	} else {
-		hb.h.flags |= MSG_RPC
+		hb.h.flags |= RPC_RPC
 		i := p.(RPCInfo)
 		hb.h.rpcid = i.GetRPCID()
 		if i.IsRequest() {
-			hb.h.flags |= MSG_REQUEST
+			hb.h.flags |= RPC_REQUEST
 		}
 	}
 }
@@ -108,13 +106,13 @@ func (hb *rpcHeaderBuffer) SetPayloadInfo(p Payload) {
 func (hb *rpcHeaderBuffer) GetPayloadInfo(p Payload) {
 	if rp, ok := p.(RoutePayload); !ok {
 		return
-	} else if (hb.h.flags & MSG_RPC) == 0 {
+	} else if (hb.h.flags & RPC_RPC) == 0 {
 		return
 	} else {
 		rp.SetIsRPC()
 		i := p.(RPCInfo)
 		i.SetRPCID(hb.h.rpcid)
-		if (hb.h.flags & MSG_REQUEST) == MSG_REQUEST {
+		if (hb.h.flags & RPC_REQUEST) == RPC_REQUEST {
 			i.SetIsRequest()
 		}
 	}
@@ -124,18 +122,13 @@ func (hb *rpcHeaderBuffer) MarshalHeader(b []byte, p Payload, l uint32) error {
 	if uint32(len(b)) < hb.hdrlen {
 		return nil
 	}
-	rp, ok := p.(RPCPayload)
-	if !ok {
-		return nil
-	}
 
 	// TODO: Set rpc_name
 	hb.h.rpc_name_len = uint16(len(hb.h.rpc_name))
-	// Set payload_name
-	hb.h.payload_name = rp.GetRPCPayloadName()
-	hb.h.payload_name_len = uint16(len(hb.h.payload_name))
 	// Set payload_offset
-	hb.h.payload_offset = uint16(uint16(hb.hdrlen) + hb.h.rpc_name_len + hb.h.payload_name_len)
+	hb.h.payload_offset = uint16(uint16(hb.hdrlen) + hb.h.rpc_name_len)
+	// Set length
+	hb.h.length = hb.hdrlen + uint32(hb.h.rpc_name_len) + l
 
 	off := 0
 	b[off] = byte(hb.h.length >> 24)
@@ -158,12 +151,12 @@ func (hb *rpcHeaderBuffer) MarshalHeader(b []byte, p Payload, l uint32) error {
 	b[off+1] = byte(hb.h.version)
 	off += 2
 
-	b[off] = byte(hb.h.rpc_name_len >> 8)
-	b[off+1] = byte(hb.h.rpc_name_len)
+	b[off] = byte(hb.h.flags >> 8)
+	b[off+1] = byte(hb.h.flags)
 	off += 2
 
-	b[off] = byte(hb.h.payload_name_len >> 8)
-	b[off+1] = byte(hb.h.payload_name_len)
+	b[off] = byte(hb.h.rpc_name_len >> 8)
+	b[off+1] = byte(hb.h.rpc_name_len)
 	off += 2
 
 	b[off] = byte(hb.h.payload_offset >> 8)
@@ -183,10 +176,7 @@ func (hb *rpcHeaderBuffer) marshalHeaderVariable(b []byte) ([]byte, error) {
 	// Write rpc_name
 	copy(b[0:], hb.h.rpc_name)
 
-	// Write payload_name
-	copy(b[hb.h.rpc_name_len:], hb.h.payload_name)
-
-	return b[hb.h.payload_offset:], nil
+	return b[0:hb.h.rpc_name_len], nil
 }
 
 func (hb *rpcHeaderBuffer) UnmarshalHeader(b []byte) error {
@@ -197,16 +187,16 @@ func (hb *rpcHeaderBuffer) UnmarshalHeader(b []byte) error {
 	off := 0
 	hb.h.length = uint32(b[off])<<24 | uint32(b[off+1])<<16 | uint32(b[off+2])<<8 | uint32(b[off+3])
 	off += 4
-	hb.h.rpcid = (uint64(b[off]<<24) | uint64(b[off+1])<<16 | uint64(b[off+2])<<8 | uint64(b[off+3])) << 32
+	hb.h.rpcid = (uint64(b[off])<<24 | uint64(b[off+1])<<16 | uint64(b[off+2])<<8 | uint64(b[off+3])) << 32
 	off += 4
 	hb.h.rpcid |= uint64(b[off])<<24 | uint64(b[off+1])<<16 | uint64(b[off+2])<<8 | uint64(b[off+3])
 	off += 4
 
 	hb.h.version = uint16(b[off])<<8 | uint16(b[off+1])
 	off += 2
-	hb.h.rpc_name_len = uint16(b[off])<<8 | uint16(b[off+1])
+	hb.h.flags = uint16(b[off])<<8 | uint16(b[off+1])
 	off += 2
-	hb.h.payload_name_len = uint16(b[off])<<8 | uint16(b[off+1])
+	hb.h.rpc_name_len = uint16(b[off])<<8 | uint16(b[off+1])
 	off += 2
 	hb.h.payload_offset = uint16(b[off])<<8 | uint16(b[off+1])
 	off += 2
@@ -219,9 +209,7 @@ func (hb *rpcHeaderBuffer) UnmarshalHeader(b []byte) error {
 func (hb *rpcHeaderBuffer) unmarshalHeaderVariable(b []byte) ([]byte, error) {
 	// Read rpc_name
 	hb.h.rpc_name = string(b[0:hb.h.rpc_name_len])
-	// Read payload_name
-	hb.h.payload_name = string(b[hb.h.rpc_name_len:hb.h.payload_offset])
-	return b[hb.h.payload_offset:], nil
+	return b[hb.h.rpc_name_len:], nil
 }
 
 func (hb *rpcHeaderBuffer) Reset() {
@@ -230,9 +218,7 @@ func (hb *rpcHeaderBuffer) Reset() {
 	hb.h.version = 1
 	hb.h.flags = 0
 	hb.h.rpc_name_len = 0
-	hb.h.payload_name_len = 0
 	hb.h.payload_offset = 0
 	hb.h.checksum = 0
 	hb.h.rpc_name = ""
-	hb.h.payload_name = ""
 }

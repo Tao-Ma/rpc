@@ -124,8 +124,9 @@ func (hb *msgHeaderBuffer) MarshalHeader(b []byte, p Payload, l uint32) error {
 	// Set the payload_id
 	hb.h.payload_id = mp.GetMsgPayloadID()
 	// Set payload length
-	hb.h.length = hb.hdrlen + l
 	hb.h.payload_offset = uint16(hb.hdrlen)
+	// Set length
+	hb.h.length = hb.hdrlen + l
 
 	// TODO: employ a better pack/unpack method!
 	off := 0
@@ -181,7 +182,7 @@ func (hb *msgHeaderBuffer) UnmarshalHeader(b []byte) error {
 	hb.h.length = uint32(b[off])<<24 | uint32(b[off+1])<<16 | uint32(b[off+2])<<8 | uint32(b[off+3])
 	off += 4
 
-	hb.h.rpcid = (uint64(b[off]<<24) | uint64(b[off+1])<<16 | uint64(b[off+2])<<8 | uint64(b[off+3])) << 32
+	hb.h.rpcid = (uint64(b[off])<<24 | uint64(b[off+1])<<16 | uint64(b[off+2])<<8 | uint64(b[off+3])) << 32
 	off += 4
 	hb.h.rpcid |= uint64(b[off])<<24 | uint64(b[off+1])<<16 | uint64(b[off+2])<<8 | uint64(b[off+3])
 	off += 4

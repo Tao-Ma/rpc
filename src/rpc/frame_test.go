@@ -29,7 +29,7 @@ func TestMockMsg(t *testing.T) {
 	pr, pw := io.Pipe()
 	ch := make(chanPayload)
 
-	hf := NewMsgHeaderFactory(NewProtobufFactory())
+	hf := NewMsgHeaderFactory(NewMsgProtobufFactory())
 
 	w := NewWriter(pw, ch, hf.NewBuffer(), nil)
 	r := NewReader(pr, ch, hf.NewBuffer(), nil)
@@ -40,9 +40,7 @@ func TestMockMsg(t *testing.T) {
 	req := NewResourceReq()
 	req.Id = proto.Uint64(10000)
 	w.Write(req)
-	select {
-	case <-time.Tick(time.Second):
-	}
+	<-time.After(1 * time.Second)
 
 	select {
 	case resp := <-ch:

@@ -16,10 +16,21 @@ func ServiceProcessConn(r *Router, c net.Conn) bool {
 }
 
 func ServiceProcessPayload(r *Router, name string, p Payload) Payload {
-	resp := NewResourceResp()
-	req := p.(*ResourceReq)
-	resp.Id = proto.Uint64(req.GetId())
-	return resp
+	if req, ok := p.(*ResourceReq); ok {
+		resp := NewResourceResp()
+		resp.Id = proto.Uint64(req.GetId())
+		return resp
+	} else if b, ok := p.([]byte); ok {
+		req := NewResourceReq()
+		if proto.Unmarshal(b, req) != nil {
+			panic("proto.Unmarshal error")
+		}
+		resp := NewResourceResp()
+		resp.Id = proto.Uint64(req.GetId())
+		return resp
+	} else {
+		panic("ServiceProcessPayload receieve wrong info")
+	}
 }
 
 func ClientProcessReponse(p Payload, arg callback_arg, err error) {
@@ -36,7 +47,7 @@ func TestRouterSingle(t *testing.T) {
 		t.FailNow()
 	}
 
-	hf := NewMsgHeaderFactory(NewProtobufFactory())
+	hf := NewRPCHeaderFactory(NewProtobufFactory())
 
 	name := "scheduler"
 	network := "tcp"
@@ -73,7 +84,7 @@ func TestRouterMultiple(t *testing.T) {
 		t.FailNow()
 	}
 
-	hf := NewMsgHeaderFactory(NewProtobufFactory())
+	hf := NewMsgHeaderFactory(NewMsgProtobufFactory())
 
 	name := "scheduler"
 	network := "tcp"
@@ -89,6 +100,8 @@ func TestRouterMultiple(t *testing.T) {
 		t.Log(err)
 		t.FailNow()
 	}
+
+	time.Sleep(1)
 
 	for i := 1; i < 10000; i++ {
 		req := NewResourceReq()
@@ -114,7 +127,7 @@ func TestReadWriter(t *testing.T) {
 	ch_s_w := make(chanPayload, 1024)
 	ch_d := make(chanPayload, 1024)
 
-	hf := NewMsgHeaderFactory(NewProtobufFactory())
+	hf := NewMsgHeaderFactory(NewMsgProtobufFactory())
 
 	ep_c := NewEndPoint("c", c, ch_c_w, ch_d, hf, nil, nil)
 	ep_s := NewEndPoint("s", s, ch_s_w, ch_s_w, hf, nil, nil)
@@ -137,7 +150,7 @@ func BenchmarkPipeReadWriter(b *testing.B) {
 	ch_s_w := make(chanPayload, 1024)
 	ch_d := make(chanPayload, 1024)
 
-	hf := NewMsgHeaderFactory(NewProtobufFactory())
+	hf := NewMsgHeaderFactory(NewMsgProtobufFactory())
 
 	ep_c := NewEndPoint("c", c, ch_c_w, ch_d, hf, nil, nil)
 	ep_s := NewEndPoint("s", s, ch_s_w, ch_s_w, hf, nil, nil)
@@ -178,7 +191,7 @@ func BenchmarkTCPReadWriter(b *testing.B) {
 	ch_s_w := make(chanPayload, 1024)
 	ch_d := make(chanPayload, 1024)
 
-	hf := NewMsgHeaderFactory(NewProtobufFactory())
+	hf := NewMsgHeaderFactory(NewMsgProtobufFactory())
 
 	ep_c := NewEndPoint("c", c, ch_c_w, ch_d, hf, nil, nil)
 	ep_s := NewEndPoint("s", s, ch_s_w, ch_s_w, hf, nil, nil)
@@ -208,7 +221,7 @@ func BenchmarkPipeSeperateRouter(b *testing.B) {
 		b.FailNow()
 	}
 
-	hf := NewMsgHeaderFactory(NewProtobufFactory())
+	hf := NewMsgHeaderFactory(NewMsgProtobufFactory())
 
 	server_r.Run()
 	client_r.Run()
@@ -234,7 +247,7 @@ func BenchmarkPipeShareRouter(b *testing.B) {
 		b.FailNow()
 	}
 
-	hf := NewMsgHeaderFactory(NewProtobufFactory())
+	hf := NewMsgHeaderFactory(NewMsgProtobufFactory())
 
 	r.Run()
 	<-time.Tick(1 * time.Millisecond)
@@ -263,7 +276,7 @@ func BenchmarkTCPSeperateRouter(b *testing.B) {
 		b.FailNow()
 	}
 
-	hf := NewMsgHeaderFactory(NewProtobufFactory())
+	hf := NewMsgHeaderFactory(NewMsgProtobufFactory())
 
 	server_r.Run()
 	client_r.Run()
@@ -295,7 +308,7 @@ func BenchmarkTCPShareRouter(b *testing.B) {
 		b.FailNow()
 	}
 
-	hf := NewMsgHeaderFactory(NewProtobufFactory())
+	hf := NewMsgHeaderFactory(NewMsgProtobufFactory())
 
 	r.Run()
 	<-time.Tick(1 * time.Millisecond)

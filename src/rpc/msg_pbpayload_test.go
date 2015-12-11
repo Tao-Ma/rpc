@@ -9,7 +9,7 @@ import (
 )
 
 func TestProtobufFactory(t *testing.T) {
-	pf := NewProtobufFactory()
+	pf := NewMsgProtobufFactory()
 	pbf1 := pf.NewBuffer()
 	b1 := make([]byte, 4096)
 
