@@ -71,10 +71,6 @@ func TestRouterSingle(t *testing.T) {
 	r.Call("scheduler", "rpc", req, ClientProcessReponse, done)
 	<-done
 
-	r.DelEndPoint("scheduler")
-
-	r.DelListener("client")
-
 	r.Stop()
 }
 
@@ -352,11 +348,6 @@ func testSeperateRouter(b *testing.B, server_r *Router, client_r *Router, n int)
 			}
 		}
 	})
-
-	for i := 0; i < n; i++ {
-		client_r.DelEndPoint(name + string(i))
-		server_r.DelListener("client" + string(i))
-	}
 
 	client_r.Stop()
 	server_r.Stop()

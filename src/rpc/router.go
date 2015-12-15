@@ -92,13 +92,9 @@ func (ep *EndPoint) Run() {
 }
 
 func (ep *EndPoint) Stop() {
+	ep.conn.Close()
 	ep.r.Stop()
 	ep.w.Stop()
-}
-
-func (ep *EndPoint) Close() {
-	ep.Stop()
-	ep.conn.Close()
 }
 
 func (ep *EndPoint) In() chan Payload {
@@ -204,12 +200,8 @@ func (l *Listener) Run() {
 }
 
 func (l *Listener) Stop() {
-	l.bg.Stop()
-}
-
-func (l *Listener) Close() {
-	l.Stop()
 	l.l.Close()
+	l.bg.Stop()
 }
 
 func (l *Listener) ServiceLoop(q chan struct{}, r chan bool) {
@@ -217,7 +209,7 @@ func (l *Listener) ServiceLoop(q chan struct{}, r chan bool) {
 
 	select {
 	case <-q:
-		l.Close()
+		l.Stop()
 	}
 	// TODO: wait ?
 }
@@ -452,15 +444,15 @@ func (r *Router) Run() {
 }
 
 func (r *Router) Stop() {
-	r.bg.Stop()
-
 	for _, l := range r.lmap {
-		l.Close()
+		l.Stop()
 	}
 
 	for _, ep := range r.nmap {
-		ep.Close()
+		ep.Stop()
 	}
+
+	r.bg.Stop()
 }
 
 func channelTimeoutWait(ch chan interface{}, v interface{}, timeout time.Duration) {
@@ -689,7 +681,7 @@ func (r *Router) Dial(name string, network string, address string, mf MsgFactory
 		c.Close()
 		return err
 	} else if err := r.AddEndPoint(ep); err != nil {
-		// TODO: ep.Close()
+		// TODO: ep.Stop()
 		return err
 	}
 
@@ -700,10 +692,10 @@ func (r *Router) ListenAndServe(name string, network string, address string, mf 
 	if l, err := net.Listen(network, address); err != nil {
 		return err
 	} else if l, err := NewListener(name, l, mf, r, server); err != nil {
-		l.Close()
+		l.Stop()
 		return err
 	} else if err := r.AddListener(l); err != nil {
-		l.Close()
+		l.Stop()
 		return err
 	}
 
@@ -724,14 +716,14 @@ forever:
 			ep.Run()
 		case n := <-r.ep_out:
 			if ep := r.delEndPoint(n); ep != nil {
-				ep.Close()
+				ep.Stop()
 			}
 		case l := <-r.l_in:
 			r.addListener(l)
 			l.Run()
 		case n := <-r.l_out:
 			if l := r.delListener(n); l != nil {
-				l.Close()
+				l.Stop()
 			}
 		case p := <-r.out:
 			//r.logger.Printf("router: %v send: %T:%v", r, c.p, c.p)
