@@ -10,6 +10,8 @@ import (
 	"time"
 )
 
+var ()
+
 // IOChannel
 type IOChannel interface {
 	In() chan Payload
@@ -61,7 +63,7 @@ type MsgBuffer interface {
 type Writer struct {
 	bg *BackgroudService
 
-	conn io.Writer
+	conn io.WriteCloser
 	mb   MsgBuffer
 	err  error
 
@@ -73,7 +75,7 @@ type Writer struct {
 	logger *log.Logger
 }
 
-func NewWriter(conn io.Writer, io IOChannel, mb MsgBuffer, logger *log.Logger) *Writer {
+func NewWriter(conn io.WriteCloser, io IOChannel, mb MsgBuffer, logger *log.Logger) *Writer {
 	w := new(Writer)
 
 	if bg, err := NewBackgroundService(w); err != nil {
@@ -105,6 +107,31 @@ func (w *Writer) Run() {
 
 func (w *Writer) Stop() {
 	w.bg.Stop()
+}
+
+func (w *Writer) StopLoop(force bool) {
+	w.conn.Close()
+}
+
+func (w *Writer) Loop(q chan struct{}) {
+forever:
+	for {
+		// forward msg from chan to conn
+		select {
+		case <-q:
+			break forever
+		case p := <-w.io.Out():
+			// TODO: timeout or error?
+			if b, err := w.write(p); err != nil {
+				// TODO: error?
+				panic(err)
+			} else if _, err := w.conn.Write(b); err != nil {
+				w.err = err
+				// TODO: stop the writer?
+				break forever
+			}
+		}
+	}
 }
 
 func (w *Writer) Write(p Payload) error {
@@ -146,32 +173,10 @@ func (w *Writer) write(p Payload) ([]byte, error) {
 	return b, nil
 }
 
-func (w *Writer) ServiceLoop(q chan struct{}, r chan bool) {
-	r <- true
-forever:
-	for {
-		// forward msg from chan to conn
-		select {
-		case <-q:
-			break forever
-		case p := <-w.io.Out():
-			// TODO: timeout or error?
-			if b, err := w.write(p); err != nil {
-				// TODO: error?
-				panic(err)
-			} else if _, err := w.conn.Write(b); err != nil {
-				w.err = err
-				// TODO: stop the writer?
-				break forever
-			}
-		}
-	}
-}
-
 type Reader struct {
 	bg *BackgroudService
 
-	conn io.Reader
+	conn io.ReadCloser
 	mb   MsgBuffer
 	err  error
 
@@ -183,7 +188,7 @@ type Reader struct {
 	logger *log.Logger
 }
 
-func NewReader(conn io.Reader, io IOChannel, mb MsgBuffer, logger *log.Logger) *Reader {
+func NewReader(conn io.ReadCloser, io IOChannel, mb MsgBuffer, logger *log.Logger) *Reader {
 	r := new(Reader)
 
 	if bg, err := NewBackgroundService(r); err != nil {
@@ -217,8 +222,11 @@ func (r *Reader) Stop() {
 	r.bg.Stop()
 }
 
-func (r *Reader) ServiceLoop(q chan struct{}, ready chan bool) {
-	ready <- true
+func (r *Reader) StopLoop(force bool) {
+	r.conn.Close()
+}
+
+func (r *Reader) Loop(q chan struct{}) {
 forever:
 	for {
 		if p, err := r.read(); err != nil {

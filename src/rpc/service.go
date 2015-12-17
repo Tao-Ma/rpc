@@ -1,0 +1,20 @@
+package rpc
+
+import ()
+
+var (
+	ErrServiceInvalidArg error = &Error{err: "service invalid argument"}
+	ErrServiceNotInit    error = &Error{err: "service not init"}
+)
+
+type Service interface {
+	// LoopOnce returns should continue.
+	Loop(quit chan struct{})
+
+	StopLoop(force bool)
+}
+
+type BGService interface {
+	Stop() error
+	Run()
+}

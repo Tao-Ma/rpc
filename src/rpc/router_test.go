@@ -224,7 +224,7 @@ func BenchmarkPipeSeperateRouter(b *testing.B) {
 	<-time.Tick(1 * time.Millisecond)
 
 	name := "scheduler"
-	n := 1
+	n := 128
 	for i := 0; i < n; i++ {
 		c, s := net.Pipe()
 		ep_c := client_r.newRouterEndPoint(name+string(i), c, hf)
@@ -249,7 +249,7 @@ func BenchmarkPipeShareRouter(b *testing.B) {
 	<-time.Tick(1 * time.Millisecond)
 
 	name := "scheduler"
-	n := 1
+	n := 128
 	for i := 0; i < n; i++ {
 		c, s := net.Pipe()
 		ep_c := r.newRouterEndPoint(name+string(i), c, hf)
@@ -286,7 +286,7 @@ func BenchmarkTCPSeperateRouter(b *testing.B) {
 	}
 
 	name := "scheduler"
-	n := 1
+	n := 128
 	for i := 0; i < n; i++ {
 		if err := client_r.Dial(name+string(i), network, address, hf); err != nil {
 			b.Log(err)
@@ -317,7 +317,7 @@ func BenchmarkTCPShareRouter(b *testing.B) {
 	}
 
 	name := "scheduler"
-	n := 1
+	n := 128
 	for i := 0; i < n; i++ {
 		if err := r.Dial(name+string(i), network, address, hf); err != nil {
 			b.Log(err)

@@ -1,12 +1,6 @@
 package rpc
 
-import (
-	"time"
-)
-
-type ServiceLoop interface {
-	ServiceLoop(chan struct{}, chan bool)
-}
+import ()
 
 type BackgroudService struct {
 	running bool
@@ -15,20 +9,25 @@ type BackgroudService struct {
 	quit  chan struct{}
 	ready chan bool
 
-	l ServiceLoop
-
-	start_timeout time.Duration
-	stop_timeout  time.Duration
+	s Service
 }
 
-func NewBackgroundService(l ServiceLoop) (*BackgroudService, error) {
+func NewBackgroundService(s Service) (*BackgroudService, error) {
+	if s == nil {
+		return nil, ErrServiceInvalidArg
+	}
+
 	bg := new(BackgroudService)
 
-	bg.l = l
-	bg.start_timeout = 3000 * time.Millisecond
-	bg.stop_timeout = 3000 * time.Millisecond
+	bg.s = s
 
 	return bg, nil
+}
+
+func (bg *BackgroudService) run() {
+	bg.ready <- true
+	bg.s.Loop(bg.quit)
+	close(bg.ready)
 }
 
 func (bg *BackgroudService) Run() {
@@ -39,18 +38,12 @@ func (bg *BackgroudService) Run() {
 	bg.quit = make(chan struct{}, 1)
 	bg.ready = make(chan bool, 1)
 
-	go bg.l.ServiceLoop(bg.quit, bg.ready)
+	go bg.run()
 
 	select {
 	case <-bg.ready:
 		bg.running = true
-	case <-time.Tick(bg.start_timeout):
-		close(bg.quit)
-		// TODO: bg.err
-		break
 	}
-
-	close(bg.ready)
 }
 
 func (bg *BackgroudService) Stop() {
@@ -59,5 +52,12 @@ func (bg *BackgroudService) Stop() {
 	}
 
 	bg.running = false
+
 	close(bg.quit)
+	bg.s.StopLoop(false)
+
+	select {
+	case <-bg.ready:
+		//bg.s.Cleanup()
+	}
 }

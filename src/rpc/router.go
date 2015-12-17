@@ -200,23 +200,24 @@ func (l *Listener) Run() {
 }
 
 func (l *Listener) Stop() {
-	l.l.Close()
 	l.bg.Stop()
 }
 
-func (l *Listener) ServiceLoop(q chan struct{}, r chan bool) {
-	go l.accepter(r)
+func (l *Listener) StopLoop(force bool) {
+	l.l.Close()
+}
+
+func (l *Listener) Loop(q chan struct{}) {
+	go l.accepter()
 
 	select {
 	case <-q:
-		l.Stop()
+		l.StopLoop(false)
 	}
 	// TODO: wait ?
 }
 
-func (l *Listener) accepter(r chan bool) {
-	r <- true
-
+func (l *Listener) accepter() {
 	for {
 		if c, err := l.l.Accept(); err != nil {
 			// TODO: log?
@@ -702,9 +703,10 @@ func (r *Router) ListenAndServe(name string, network string, address string, mf 
 	return nil
 }
 
-func (r *Router) ServiceLoop(quit chan struct{}, ready chan bool) {
-	ready <- true
+func (r *Router) StopLoop(force bool) {
+}
 
+func (r *Router) Loop(quit chan struct{}) {
 forever:
 	for {
 		select {
