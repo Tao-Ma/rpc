@@ -2,8 +2,17 @@
 
 This is a simple rpc framework.
 
+Architect
+___
+
+	Router
+		|-EndPoint
+			|-Reader
+			|-Writer
+		|-Listern
+
 TODO
-_________
+___
 - Support 'grpc' register feature
 - Error/log
 - Seperate BackgroundService to a standalone file

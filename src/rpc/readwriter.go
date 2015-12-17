@@ -10,7 +10,10 @@ import (
 	"time"
 )
 
-var ()
+var (
+	errQuit      error = &Error{err: "quit"}
+	errShortRead error = &Error{err: "short read"}
+)
 
 // IOChannel
 type IOChannel interface {
@@ -72,6 +75,10 @@ type Writer struct {
 	maxlen uint32
 	b      []byte
 
+	// inprogress state
+	inprogress_p Payload
+	inprogress_b []byte
+
 	logger *log.Logger
 }
 
@@ -113,23 +120,46 @@ func (w *Writer) StopLoop(force bool) {
 	w.conn.Close()
 }
 
-func (w *Writer) Loop(q chan struct{}) {
-forever:
-	for {
-		// forward msg from chan to conn
+func (w *Writer) write(b []byte) (int, error) {
+	return w.conn.Write(b)
+}
+
+func (w *Writer) LoopOnce(q chan struct{}) error {
+	var err error
+
+	if w.inprogress_b == nil {
 		select {
 		case <-q:
-			break forever
-		case p := <-w.io.Out():
-			// TODO: timeout or error?
-			if b, err := w.write(p); err != nil {
-				// TODO: error?
-				panic(err)
-			} else if _, err := w.conn.Write(b); err != nil {
-				w.err = err
-				// TODO: stop the writer?
-				break forever
-			}
+			return errQuit
+		case w.inprogress_p = <-w.io.Out():
+		}
+	}
+
+	if w.inprogress_p == nil {
+		// channel closed
+		return errQuit
+	} else if w.inprogress_b, err = w.Marshal(w.inprogress_p); err != nil {
+		// reset w.inprogress_p
+		w.inprogress_p = nil
+		w.inprogress_b = nil
+		return err
+	}
+
+	if _, err = w.write(w.inprogress_b); err != nil {
+		w.inprogress_b = nil
+		return err
+	}
+
+	w.inprogress_b = nil
+	return nil
+}
+
+func (w *Writer) Loop(q chan struct{}) {
+	for {
+		if err := w.LoopOnce(q); err != nil {
+			// Remeber the last error
+			w.err = err
+			break
 		}
 	}
 }
@@ -152,7 +182,7 @@ func (w *Writer) Write(p Payload) error {
 	return nil
 }
 
-func (w *Writer) write(p Payload) ([]byte, error) {
+func (w *Writer) Marshal(p Payload) ([]byte, error) {
 	w.mb.Reset()
 
 	w.mb.SetPayloadInfo(p)
@@ -173,6 +203,15 @@ func (w *Writer) write(p Payload) ([]byte, error) {
 	return b, nil
 }
 
+const (
+	header_init = iota
+	header_read
+	header_unmarshal
+	body_init
+	body_read
+	body_unmarshal
+)
+
 type Reader struct {
 	bg *BackgroudService
 
@@ -184,6 +223,11 @@ type Reader struct {
 
 	maxlen uint32
 	b      []byte
+
+	step int
+	p    Payload
+	hb   []byte
+	pb   []byte
 
 	logger *log.Logger
 }
@@ -211,7 +255,14 @@ func NewReader(conn io.ReadCloser, io IOChannel, mb MsgBuffer, logger *log.Logge
 		r.logger = logger
 	}
 
+	r.step = header_init
+
 	return r
+}
+
+func (r *Reader) Read() (Payload, error) {
+	// TODO: not implement
+	return nil, nil
 }
 
 func (r *Reader) Run() {
@@ -227,58 +278,73 @@ func (r *Reader) StopLoop(force bool) {
 }
 
 func (r *Reader) Loop(q chan struct{}) {
-forever:
 	for {
-		if p, err := r.read(); err != nil {
-			// TODO: timeout or error?
-			r.err = err
-			break forever
-		} else {
-			select {
-			case r.io.In() <- p:
-			case <-q:
-				// TODO: cleanup
-				break forever
-			}
+		if r.p == nil {
+			r.p, r.err = r.LoopOnce(q)
+		}
+
+		if r.err != nil {
+			break
+		}
+
+		select {
+		case r.io.In() <- r.p:
+			r.p = nil
+		case <-q:
+			break
 		}
 	}
 }
 
-//Try to read a whole msg.
-func (r *Reader) read() (Payload, error) {
-	r.mb.Reset()
-	hb := r.b[0:r.mb.GetHdrLen()]
-	// TODO: Read() interrupt?
-	if _, err := r.conn.Read(hb); err != nil {
-		return nil, err
-	}
+func (r *Reader) read(b []byte) (int, error) {
+	return r.conn.Read(b)
+}
 
-	if err := r.mb.UnmarshalHeader(hb); err != nil {
-		return nil, err
-	}
-
-	plen := r.mb.GetPayloadLen()
-	pb := r.b[r.mb.GetHdrLen() : r.mb.GetHdrLen()+plen]
-	// Support header-only message(udp or no payload at all).
-	if plen > 0 {
-		// TODO: enlarge b []byte if plen > r.maxlen or error out.
-		if n, err := r.conn.Read(pb); err != nil {
-			return nil, err
-		} else if uint32(n) != plen {
-			// TODO: error?
+func (r *Reader) LoopOnce(q chan struct{}) (Payload, error) {
+	for {
+		switch r.step {
+		case header_init:
+			r.mb.Reset()
+			r.hb = r.b[0:r.mb.GetHdrLen()]
+			r.step = header_read
+		case header_read:
+			if _, err := r.read(r.hb); err != nil {
+				return nil, err
+			}
+			r.step = header_unmarshal
+		case header_unmarshal:
+			if err := r.mb.UnmarshalHeader(r.hb); err != nil {
+				// invalid message
+				return nil, err
+			}
+			r.step = body_init
+		case body_init:
+			plen := r.mb.GetPayloadLen()
+			if plen > 0 {
+				r.pb = r.b[r.mb.GetHdrLen() : r.mb.GetHdrLen()+plen]
+				r.step = body_read
+			} else {
+				// TODO: no payload ?
+			}
+		case body_read:
+			// TODO: enlarge b []byte if plen > r.maxlen or error out.
+			plen := len(r.pb)
+			if n, err := r.read(r.pb); err != nil {
+				return nil, err
+			} else if n != plen {
+				return n, errShortRead
+			}
+			r.step = body_unmarshal
+		case body_unmarshal:
+			if p, err := r.mb.UnmarshalPayload(r.pb); err != nil {
+				// invalid message
+				return nil, err
+			} else {
+				p = r.io.Wrap(p)
+				r.mb.GetPayloadInfo(p)
+				r.step = header_init
+				return p, nil
+			}
 		}
 	}
-
-	p, err := r.mb.UnmarshalPayload(pb)
-	if err != nil {
-		return nil, err
-	}
-	if p == nil {
-		panic("unmarshal failed")
-	}
-
-	p = r.io.Wrap(p)
-	r.mb.GetPayloadInfo(p)
-
-	return p, nil
 }
