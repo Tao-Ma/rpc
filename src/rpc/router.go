@@ -218,7 +218,7 @@ func (l *Listener) accepter() {
 			// TODO: name!
 			break
 		} else {
-			l.r.ep_in <- ep
+			l.r.AddEndPoint(ep)
 		}
 	}
 }
@@ -247,7 +247,7 @@ type routeMsg struct {
 	arg callback_arg
 }
 
-func (rm *routeMsg) Reset() {
+func (rm *routeMsg) Reset() *routeMsg {
 	rm.id = 0
 	rm.ep_name = ""
 	rm.rpc = ""
@@ -256,6 +256,8 @@ func (rm *routeMsg) Reset() {
 	rm.p = nil
 	rm.cb = nil
 	rm.arg = nil
+
+	return rm
 }
 
 func (rm *routeMsg) GetEPName() string {
@@ -355,16 +357,34 @@ func (rm *routeMsg) Return(r *Router, reply RouteRPCPayload) {
 	r.clientOutMsgs.Put(rm)
 }
 
+const (
+	RouterOPAddEndPoint = iota
+	RouterOPDelEndPoint
+	RouterOPAddListener
+	RouterOPDelListener
+	RouterOPStop
+)
+
+type op struct {
+	t int
+	n string
+	v interface{}
+}
+
+func (op *op) Reset() *op {
+	op.n = ""
+	op.v = nil
+	return op
+}
+
 type Router struct {
 	bg *BackgroudService
 
 	nmap map[string]*EndPoint // used to find passive server
 	lmap map[string]*Listener // Service name
 
-	l_in   chan *Listener // read by Router
-	l_out  chan string
-	ep_in  chan *EndPoint // read by Router
-	ep_out chan string
+	ops *ResourceManager
+	op  chan *op
 
 	// protect by clientOutMsgs, serverOutMsgs, inMsgs
 	out chan Payload
@@ -398,10 +418,9 @@ func NewRouter(logger *log.Logger, serve ServePayload) (*Router, error) {
 	r.lmap = make(map[string]*Listener)
 	r.nmap = make(map[string]*EndPoint)
 
-	r.l_in = make(chan *Listener, 4)
-	r.l_out = make(chan string, 16)
-	r.ep_in = make(chan *EndPoint, 32)
-	r.ep_out = make(chan string, 128)
+	op_num := 128
+	r.ops = NewResourceManager(op_num, func() interface{} { return new(op) })
+	r.op = make(chan *op, op_num)
 
 	n := 1024
 	r.in = make(chan Payload, n)
@@ -533,29 +552,23 @@ func (r *Router) newHijackedEndPoint(name string, c net.Conn, mf MsgFactory, log
 }
 
 func (r *Router) AddEndPoint(ep *EndPoint) error {
-	select {
-	case r.ep_in <- ep:
-	default:
-		select {
-		case r.ep_in <- ep:
-		case <-time.Tick(r.timeout):
-			// TODO: track failure
-		}
-	}
+	op := r.ops.Get().(*op)
+
+	op.t = RouterOPAddEndPoint
+	op.v = ep
+
+	r.op <- op
 
 	return nil
 }
 
 func (r *Router) DelEndPoint(name string) error {
-	select {
-	case r.ep_out <- name:
-	default:
-		select {
-		case r.ep_out <- name:
-		case <-time.Tick(r.timeout):
-			// TODO: track failure
-		}
-	}
+	op := r.ops.Get().(*op)
+
+	op.t = RouterOPDelEndPoint
+	op.n = name
+
+	r.op <- op
 
 	return nil
 }
@@ -584,30 +597,23 @@ func (r *Router) delEndPoint(name string) *EndPoint {
 
 // For server
 func (r *Router) AddListener(l *Listener) error {
-	select {
-	case r.l_in <- l:
-	default:
-		select {
-		case r.l_in <- l:
-		case <-time.Tick(r.timeout):
-			// TODO: error
-		}
-	}
+	op := r.ops.Get().(*op)
+
+	op.t = RouterOPAddListener
+	op.v = l
+
+	r.op <- op
 
 	return nil
 }
 
 func (r *Router) DelListener(name string) error {
-	// Add token recycle policy can prevent close(channel)
-	select {
-	case r.l_out <- name:
-	default:
-		select {
-		case r.l_out <- name:
-		case <-time.Tick(r.timeout):
-			// TODO: track failure
-		}
-	}
+	op := r.ops.Get().(*op)
+
+	op.t = RouterOPDelListener
+	op.n = name
+
+	r.op <- op
 
 	return nil
 }
@@ -668,21 +674,26 @@ forever:
 		select {
 		case <-quit:
 			break forever
-		case ep := <-r.ep_in:
-			//r.logger.Printf("router: %v ep_in: %T:%v", r, ep, ep.name)
-			r.addEndPoint(ep)
-			ep.Run()
-		case n := <-r.ep_out:
-			if ep := r.delEndPoint(n); ep != nil {
-				ep.Stop()
+		case op := <-r.op:
+			switch op.t {
+			case RouterOPAddEndPoint:
+				ep := op.v.(*EndPoint)
+				r.addEndPoint(ep)
+				ep.Run()
+			case RouterOPDelEndPoint:
+				if ep := r.delEndPoint(op.n); ep != nil {
+					ep.Stop()
+				}
+			case RouterOPAddListener:
+				l := op.v.(*Listener)
+				r.addListener(l)
+				l.Run()
+			case RouterOPDelListener:
+				if l := r.delListener(op.n); l != nil {
+					l.Stop()
+				}
 			}
-		case l := <-r.l_in:
-			r.addListener(l)
-			l.Run()
-		case n := <-r.l_out:
-			if l := r.delListener(n); l != nil {
-				l.Stop()
-			}
+			r.ops.Put(op.Reset())
 		case p := <-r.out:
 			//r.logger.Printf("router: %v send: %T:%v", r, c.p, c.p)
 			out := p.(RoutePayload)
