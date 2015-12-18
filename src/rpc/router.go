@@ -366,16 +366,18 @@ type Router struct {
 	ep_in  chan *EndPoint // read by Router
 	ep_out chan string
 
-	out chan Payload // read by Router
-	in  chan Payload // read by Router
+	// protect by clientOutMsgs, serverOutMsgs, inMsgs
+	out chan Payload
+	in  chan Payload
 
-	next  uint64
-	calls map[uint64]RouteRPCPayload
-
-	waiters       chan *waiter // TODO: move out of Router
 	clientOutMsgs *ResourceManager
 	serverOutMsgs *ResourceManager
 	inMsgs        *ResourceManager
+
+	waiters *ResourceManager
+
+	next  uint64
+	calls map[uint64]RouteRPCPayload
 
 	serve ServePayload
 
@@ -402,16 +404,16 @@ func NewRouter(logger *log.Logger, serve ServePayload) (*Router, error) {
 	r.ep_out = make(chan string, 128)
 
 	n := 1024
-	r.in = make(chan Payload, n*2)
+	r.in = make(chan Payload, n)
 	r.out = make(chan Payload, n)
 
+	r.waiters = NewResourceManager(n, func() interface{} { w := new(waiter); w.ch = make(chan Payload, 1); w.r = r; return w })
 	r.calls = make(map[uint64]RouteRPCPayload)
 	r.next = 1
 
-	r.waiters = make(chan *waiter, n)
 	r.clientOutMsgs = NewResourceManager(n, func() interface{} { return new(routeMsg) })
 	r.serverOutMsgs = NewResourceManager(n, func() interface{} { return new(routeMsg) })
-	r.inMsgs = NewResourceManager(n*2, func() interface{} { return new(routeMsg) })
+	r.inMsgs = NewResourceManager(n, func() interface{} { return new(routeMsg) })
 
 	r.serve = serve
 
@@ -429,15 +431,28 @@ func (r *Router) Run() {
 }
 
 func (r *Router) Stop() {
+	// Stop Listeners: No new EndPoint can be created.
 	for _, l := range r.lmap {
 		l.Stop()
 	}
 
+	// Stop Operations: No new EndPoint can be added.
+	// TODO: in progress RPC?
+	// Stop EndPoints: Server Shutdown/ClientShutdown.
 	for _, ep := range r.nmap {
 		ep.Stop()
 	}
 
+	// Reclaim resources
+	r.waiters.Close()
+	r.clientOutMsgs.Close()
+	r.inMsgs.Close()
+	r.serverOutMsgs.Close()
+
+	// Stop Loop
 	r.bg.Stop()
+
+	// Close channels
 }
 
 // call_done is a helper to notify sync CallWait()
@@ -455,40 +470,15 @@ func call_done(p Payload, arg callback_arg, err error) {
 
 // Call sync
 func (r *Router) CallWait(ep string, rpc string, p Payload, n time.Duration) Payload {
-	var (
-		w      *waiter
-		result Payload
-	)
+	w := r.waiters.Get().(*waiter)
 
-	select {
-	case w = <-r.waiters:
-	default:
-		w = new(waiter)
-		w.ch = make(chan Payload, 1)
-		w.r = r
-	}
-
+	// pass timeout information to Call.
 	r.Call(ep, rpc, p, call_done, w)
 
-	// Wait result
-	select {
-	case result = <-w.ch:
-	default:
-		select {
-		case result = <-w.ch:
-		case <-time.Tick(n * time.Second):
-		}
-	}
+	// wait result, rpc must returns something.
+	result := <-w.ch
 
-	if result != nil {
-		select {
-		case r.waiters <- w:
-		default:
-		}
-	} else {
-		// timeout?
-		// TODO: w & w.ch leak!
-	}
+	r.waiters.Put(w)
 
 	return result
 }

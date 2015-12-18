@@ -11,6 +11,7 @@ type new_func func() interface{}
 
 type ResourceManager struct {
 	n int
+	r bool
 
 	ch chan interface{}
 }
@@ -26,10 +27,16 @@ func NewResourceManager(n int, f new_func) *ResourceManager {
 		rm.ch <- f()
 	}
 
+	rm.r = true
+
 	return rm
 }
 
 func (rm *ResourceManager) Close() {
+	if !rm.r {
+		return
+	}
+
 	for rm.n > 0 {
 		if v := rm.Get(); v != nil {
 			rm.n--
@@ -37,6 +44,7 @@ func (rm *ResourceManager) Close() {
 	}
 
 	close(rm.ch)
+	rm.r = false
 }
 
 func (rm *ResourceManager) Get() interface{} {
