@@ -72,6 +72,9 @@ type Writer struct {
 
 	io IOChannel
 
+	rm *ResourceManager
+
+	// buffer cache
 	maxlen uint32
 	b      []byte
 
@@ -96,6 +99,8 @@ func NewWriter(conn io.WriteCloser, io IOChannel, mb MsgBuffer, logger *log.Logg
 
 	w.io = io
 
+	w.rm = NewResourceManager(128, func() interface{} { return io.Out() })
+
 	w.maxlen = 4096
 	w.b = make([]byte, w.mb.GetHdrLen()+w.maxlen)
 
@@ -117,6 +122,7 @@ func (w *Writer) Stop() {
 }
 
 func (w *Writer) StopLoop(force bool) {
+	// TODO: Add a handler to do something before conn.Close().
 	w.conn.Close()
 }
 
@@ -168,16 +174,24 @@ func (w *Writer) Write(p Payload) error {
 	// TODO: get token
 	// Detect channel closed by nil
 
+	ch := w.rm.Get().(chan Payload)
+	if ch == nil {
+		// TODO: closed
+		return nil
+	}
+
 	select {
-	case w.io.Out() <- p:
+	case ch <- p:
 	default:
 		select {
-		case w.io.Out() <- p:
+		case ch <- p:
 		case <-time.Tick(0 * time.Second):
 			// TODO: timeout
 			return nil
 		}
 	}
+
+	w.rm.Put(ch)
 
 	return nil
 }
@@ -274,6 +288,7 @@ func (r *Reader) Stop() {
 }
 
 func (r *Reader) StopLoop(force bool) {
+	// TODO: Add a handler to do something before conn.Close().
 	r.conn.Close()
 }
 

@@ -129,12 +129,7 @@ func (ep *EndPoint) Unwrap(p Payload) Payload {
 }
 
 func (r *Router) Wrap(p Payload) RoutePayload {
-	var in *routeMsg
-	select {
-	case in = <-r.inMsgs:
-	default:
-		in = new(routeMsg)
-	}
+	in := r.inMsgs.Get().(*routeMsg)
 
 	in.Reset()
 	in.p = p
@@ -144,13 +139,8 @@ func (r *Router) Wrap(p Payload) RoutePayload {
 
 func (r *Router) Unwrap(p RoutePayload) Payload {
 	if m, ok := p.(*routeMsg); ok {
-		if !m.IsRPC() {
-			select {
-			// TODO: pretect the channle?
-			// TODO: prevent the resource leak?
-			case r.outMsgs <- m:
-			default:
-			}
+		if !m.IsRPC() || !m.IsRequest() {
+			r.serverOutMsgs.Put(m)
 		}
 		return m.p
 	}
@@ -336,12 +326,7 @@ func (rm *routeMsg) Serve(r *Router) {
 
 	reply := r.serve(r, rm.ep_name, rm.p)
 
-	var out *routeMsg
-	select {
-	case out = <-r.outMsgs:
-	default:
-		out = new(routeMsg)
-	}
+	out := r.serverOutMsgs.Get().(*routeMsg)
 
 	out.ep_name = rm.ep_name
 	out.rpc = rm.rpc
@@ -367,10 +352,7 @@ func (rm *routeMsg) Serve(r *Router) {
 
 func (rm *routeMsg) Return(r *Router, reply RouteRPCPayload) {
 	go rm.cb(reply.GetPayload(), rm.arg, nil)
-	select {
-	case r.outMsgs <- rm:
-	default:
-	}
+	r.clientOutMsgs.Put(rm)
 }
 
 type Router struct {
@@ -390,9 +372,10 @@ type Router struct {
 	next  uint64
 	calls map[uint64]RouteRPCPayload
 
-	waiters chan *waiter   // TODO: move out of Router
-	outMsgs chan *routeMsg // read by Router
-	inMsgs  chan *routeMsg // write by Router
+	waiters       chan *waiter // TODO: move out of Router
+	clientOutMsgs *ResourceManager
+	serverOutMsgs *ResourceManager
+	inMsgs        *ResourceManager
 
 	serve ServePayload
 
@@ -419,15 +402,16 @@ func NewRouter(logger *log.Logger, serve ServePayload) (*Router, error) {
 	r.ep_out = make(chan string, 128)
 
 	n := 1024
-	r.in = make(chan Payload, n*4)
+	r.in = make(chan Payload, n*2)
 	r.out = make(chan Payload, n)
 
 	r.calls = make(map[uint64]RouteRPCPayload)
 	r.next = 1
 
 	r.waiters = make(chan *waiter, n)
-	r.outMsgs = make(chan *routeMsg, n)
-	r.inMsgs = make(chan *routeMsg, n)
+	r.clientOutMsgs = NewResourceManager(n, func() interface{} { return new(routeMsg) })
+	r.serverOutMsgs = NewResourceManager(n, func() interface{} { return new(routeMsg) })
+	r.inMsgs = NewResourceManager(n*2, func() interface{} { return new(routeMsg) })
 
 	r.serve = serve
 
@@ -454,18 +438,6 @@ func (r *Router) Stop() {
 	}
 
 	r.bg.Stop()
-}
-
-func channelTimeoutWait(ch chan interface{}, v interface{}, timeout time.Duration) {
-	select {
-	case ch <- v:
-	default:
-		select {
-		case ch <- v:
-		case <-time.After(timeout):
-		}
-
-	}
 }
 
 // call_done is a helper to notify sync CallWait()
@@ -523,13 +495,7 @@ func (r *Router) CallWait(ep string, rpc string, p Payload, n time.Duration) Pay
 
 // Call async
 func (r *Router) Call(ep string, rpc string, p Payload, cb callback_func, arg callback_arg) {
-	var out *routeMsg
-
-	select {
-	case out = <-r.outMsgs:
-	default:
-		out = new(routeMsg)
-	}
+	out := r.clientOutMsgs.Get().(*routeMsg)
 
 	out.ep_name = ep
 	out.rpc = rpc
@@ -739,7 +705,7 @@ forever:
 
 			if ep, exist := r.nmap[out.GetEPName()]; exist {
 				//r.logger.Printf("router: %v rpcout: %T:%v", r, c.p, c.p)
-				go ep.write(out)
+				ep.write(out)
 			} else {
 				// race condition: Dial() is later than Call()
 				go out.Error(nil)
@@ -764,11 +730,7 @@ forever:
 				// TODO: msg
 				go r.serve(r, in.GetEPName(), in.GetPayload())
 			}
-
-			select {
-			case r.inMsgs <- in.(*routeMsg):
-			default:
-			}
+			r.inMsgs.Put(in)
 		}
 	}
 }
@@ -801,8 +763,6 @@ func (r *Router) RpcIn(in RouteRPCPayload) RouteRPCPayload {
 	}
 }
 
-// Endpoint.Read/Write
 // route rule
 // Error
 // EndPoint/Listener must send join/left msg to sync with others!
-// Log
