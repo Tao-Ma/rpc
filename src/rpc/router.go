@@ -19,6 +19,7 @@ var (
 	ErrOPEndPointNotExist    error = &Error{err: "EndPoint does not exist"}
 
 	ErrOutErrorEndPointNotExist error = &Error{err: "EndPoint does not exist"}
+	ErrOPRouterStopped          error = &Error{err: "Router stopped"}
 )
 
 type RPCInfo interface {
@@ -154,6 +155,7 @@ func (r *Router) Error(ep *EndPoint, err error) {
 }
 
 func (r *Router) Wrap(p Payload) RoutePayload {
+	// TODO: nil
 	in := r.inMsgs.Get().(*routeMsg)
 
 	in.Reset()
@@ -355,6 +357,7 @@ func (rm *routeMsg) Serve(r *Router) {
 
 	reply := r.serve(r, rm.ep_name, rm.p)
 
+	// TODO: nil?
 	out := r.serverOutMsgs.Get().(*routeMsg)
 
 	out.ep_name = rm.ep_name
@@ -588,7 +591,13 @@ func call_done(p Payload, arg callback_arg, err error) {
 
 // Call sync
 func (r *Router) CallWait(ep string, rpc string, p Payload, n time.Duration) Payload {
-	w := r.waiters.Get().(*waiter)
+	var w *waiter
+	if v := r.waiters.Get(); v == nil {
+		// TODO: error
+		return nil
+	} else {
+		w = v.(*waiter)
+	}
 
 	// pass timeout information to Call.
 	r.Call(ep, rpc, p, call_done, w)
@@ -603,7 +612,12 @@ func (r *Router) CallWait(ep string, rpc string, p Payload, n time.Duration) Pay
 
 // Call async
 func (r *Router) Call(ep string, rpc string, p Payload, cb callback_func, arg callback_arg) {
-	out := r.clientOutMsgs.Get().(*routeMsg)
+	var out *routeMsg
+	if v := r.clientOutMsgs.Get(); v == nil {
+		// TODO: callback
+	} else {
+		out = v.(*routeMsg)
+	}
 
 	out.ep_name = ep
 	out.rpc = rpc
@@ -651,7 +665,12 @@ func (r *Router) newHijackedEndPoint(name string, c net.Conn, mf MsgFactory, log
 }
 
 func (r *Router) AddEndPoint(ep *EndPoint) error {
-	op := r.ops.Get().(*opReq)
+	var op *opReq
+	if v := r.ops.Get(); v == nil {
+		return ErrOPRouterStopped
+	} else {
+		op = v.(*opReq)
+	}
 
 	op.t = RouterOPAddEndPoint
 	op.v = ep
@@ -669,7 +688,12 @@ func (r *Router) AddEndPoint(ep *EndPoint) error {
 }
 
 func (r *Router) DelEndPoint(name string) error {
-	op := r.ops.Get().(*opReq)
+	var op *opReq
+	if v := r.ops.Get(); v == nil {
+		return ErrOPRouterStopped
+	} else {
+		op = v.(*opReq)
+	}
 
 	op.t = RouterOPDelEndPoint
 	op.n = name
@@ -710,9 +734,14 @@ func (r *Router) delEndPoint(name string) (*EndPoint, error) {
 
 // For server
 func (r *Router) AddListener(l *Listener) error {
-	l.Run()
+	var op *opReq
+	if v := r.ops.Get(); v == nil {
+		return ErrOPRouterStopped
+	} else {
+		op = v.(*opReq)
+	}
 
-	op := r.ops.Get().(*opReq)
+	l.Run()
 
 	op.t = RouterOPAddListener
 	op.v = l
@@ -730,7 +759,12 @@ func (r *Router) AddListener(l *Listener) error {
 }
 
 func (r *Router) DelListener(name string) error {
-	op := r.ops.Get().(*opReq)
+	var op *opReq
+	if v := r.ops.Get(); v == nil {
+		return ErrOPRouterStopped
+	} else {
+		op = v.(*opReq)
+	}
 
 	op.t = RouterOPDelListener
 	op.n = name

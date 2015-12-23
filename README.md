@@ -15,7 +15,6 @@ TODO
 ___
 - Support 'grpc' register feature
 - Error/log
-- Seperate BackgroundService to a standalone file
 - Defer socket/listener/...
-- Concurrent connect/close support
-- Add token access for all writtable channel
+- Reuse Reader/Writer/EndPoint
+- Ensure opReq.ret is resuable and concurrent safe
