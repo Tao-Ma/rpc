@@ -357,6 +357,57 @@ func testSeperateRouter(b *testing.B, server_r *Router, client_r *Router, n int)
 	server_r.Stop()
 }
 
+func BenchmarkTCPReconnectRouter(b *testing.B) {
+	r, err := NewRouter(nil, ServiceProcessPayload)
+	if err != nil {
+		b.FailNow()
+	}
+	hf := NewMsgHeaderFactory(NewMsgProtobufFactory())
+
+	r.Run()
+	<-time.Tick(1 * time.Millisecond)
+
+	network := "tcp"
+	address := "localhost:10000"
+	if err := r.ListenAndServe("client", network, address, hf, ServiceProcessConn); err != nil {
+		b.Log(err)
+		b.FailNow()
+	}
+
+	<-time.Tick(1 * time.Millisecond)
+
+	b.ResetTimer()
+	b.RunParallel(func(pb *testing.PB) {
+		for pb.Next() {
+			name := "scheduler"
+
+			req := NewResourceReq()
+			req.Id = proto.Uint64(1)
+
+			r, err := NewRouter(nil, ServiceProcessPayload)
+			if err != nil {
+				b.FailNow()
+			}
+
+			hf := NewMsgHeaderFactory(NewMsgProtobufFactory())
+
+			r.Run()
+			if err := r.Dial(name, network, address, hf); err != nil {
+				b.Log(err)
+				b.FailNow()
+			}
+
+			if resp := r.CallWait(name, "rpc", req, 5); resp == nil {
+				b.Log("CallWait timeout")
+				b.FailNow()
+			}
+			r.Stop()
+		}
+	})
+
+	r.Stop()
+}
+
 func BenchmarkTCPReadWrite(b *testing.B) {
 	network := "tcp"
 	address := "localhost:10009"

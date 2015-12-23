@@ -17,6 +17,8 @@ var (
 	ErrOPAddEndPointExist    error = &Error{err: "AddEndPoint already exist"}
 	ErrOPListenerNotExist    error = &Error{err: "Listener does not exist"}
 	ErrOPEndPointNotExist    error = &Error{err: "EndPoint does not exist"}
+
+	ErrOutErrorEndPointNotExist error = &Error{err: "EndPoint does not exist"}
 )
 
 type RPCInfo interface {
@@ -59,6 +61,8 @@ type RoutePayload interface {
 type PayloadWrapper interface {
 	Wrap(Payload) RoutePayload
 	Unwrap(RoutePayload) Payload
+
+	Error(*EndPoint, error)
 }
 
 type EndPoint struct {
@@ -135,6 +139,18 @@ func (ep *EndPoint) Unwrap(p Payload) Payload {
 
 	// XXX: should not happen?
 	return p
+}
+
+func (ep *EndPoint) InError(err error) {
+	ep.pw.Error(ep, err)
+}
+
+func (ep *EndPoint) OutError(err error) {
+	ep.pw.Error(ep, err)
+}
+
+func (r *Router) Error(ep *EndPoint, err error) {
+	r.DelEndPoint(ep.name)
 }
 
 func (r *Router) Wrap(p Payload) RoutePayload {
@@ -325,7 +341,7 @@ func (rm *routeMsg) SetRPCName(rpc string) {
 
 func (rm *routeMsg) Error(err error) {
 	// TODO: router?
-	go rm.cb(nil, rm.arg, nil)
+	rm.cb(nil, rm.arg, err)
 }
 
 // mock
@@ -635,8 +651,6 @@ func (r *Router) newHijackedEndPoint(name string, c net.Conn, mf MsgFactory, log
 }
 
 func (r *Router) AddEndPoint(ep *EndPoint) error {
-	ep.Run()
-
 	op := r.ops.Get().(*opReq)
 
 	op.t = RouterOPAddEndPoint
@@ -793,6 +807,7 @@ func (r *Router) LoopProcessOperation(op *opReq) {
 			ret = ErrOPAddEndPointStopping
 		} else {
 			ret = r.addEndPoint(ep)
+			ep.Run()
 		}
 	case RouterOPDelEndPoint:
 		if ep, err := r.delEndPoint(op.n); err != nil {
@@ -860,7 +875,7 @@ forever:
 				ep.write(out)
 			} else {
 				// race condition: Dial() is later than Call()
-				go out.Error(nil)
+				go out.Error(ErrOutErrorEndPointNotExist)
 			}
 		case p := <-r.in:
 			//r.logger.Printf("router: %v recv: %T:%v", r, p, p)

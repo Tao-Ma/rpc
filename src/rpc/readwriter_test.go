@@ -24,6 +24,10 @@ func (io chanPayload) Wrap(p Payload) Payload {
 func (io chanPayload) Unwrap(p Payload) Payload {
 	return p
 }
+func (io chanPayload) InError(err error) {
+}
+func (io chanPayload) OutError(err error) {
+}
 
 func TestMockMsg(t *testing.T) {
 	pr, pw := io.Pipe()

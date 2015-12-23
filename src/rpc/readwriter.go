@@ -23,6 +23,9 @@ type IOChannel interface {
 	// Support decorate data
 	Unwrap(Payload) Payload
 	Wrap(Payload) Payload
+
+	InError(error)
+	OutError(error)
 }
 
 /*
@@ -162,9 +165,9 @@ func (w *Writer) LoopOnce(q chan struct{}) error {
 
 func (w *Writer) Loop(q chan struct{}) {
 	for {
-		if err := w.LoopOnce(q); err != nil {
+		if w.err = w.LoopOnce(q); w.err != nil {
 			// Remeber the last error
-			w.err = err
+			w.io.OutError(w.err)
 			break
 		}
 	}
@@ -299,6 +302,7 @@ func (r *Reader) Loop(q chan struct{}) {
 		}
 
 		if r.err != nil {
+			r.io.InError(r.err)
 			break
 		}
 
