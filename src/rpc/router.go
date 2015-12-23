@@ -10,6 +10,15 @@ import (
 	"time"
 )
 
+var (
+	ErrOPAddListenerStopping error = &Error{err: "AddListener is stopping"}
+	ErrOPAddEndPointStopping error = &Error{err: "AddEndPoint is stopping"}
+	ErrOPAddListenerExist    error = &Error{err: "AddEndPoint already exist"}
+	ErrOPAddEndPointExist    error = &Error{err: "AddEndPoint already exist"}
+	ErrOPListenerNotExist    error = &Error{err: "Listener does not exist"}
+	ErrOPEndPointNotExist    error = &Error{err: "EndPoint does not exist"}
+)
+
 type RPCInfo interface {
 	GetRPCID() uint64
 	SetRPCID(uint64)
@@ -214,11 +223,13 @@ func (l *Listener) accepter() {
 			break
 		} else if l.serve != nil && l.serve(l.r, c) {
 			// TODO: serve
-		} else if ep := l.r.newRouterEndPoint(l.name, c, l.mf); ep == nil {
-			// TODO: name!
+		} else if ep := l.r.newRouterEndPoint(l.name+c.RemoteAddr().String(), c, l.mf); ep == nil {
+			c.Close()
 			break
+		} else if err := l.r.AddEndPoint(ep); err != nil {
+			ep.Stop()
 		} else {
-			l.r.AddEndPoint(ep)
+			//l.r.logger.Print(ep)
 		}
 	}
 }
@@ -360,31 +371,43 @@ func (rm *routeMsg) Return(r *Router, reply RouteRPCPayload) {
 const (
 	RouterOPAddEndPoint = iota
 	RouterOPDelEndPoint
+	RouterOPStopAddEndPoint
+	RouterOPStopEndPoint
 	RouterOPAddListener
 	RouterOPDelListener
-	RouterOPStop
+	RouterOPStopAddListener
+	RouterOPStopListener
 )
 
-type op struct {
+type opReq struct {
 	t int
 	n string
 	v interface{}
+
+	// error or object
+	ret chan interface{}
 }
 
-func (op *op) Reset() *op {
+func (op *opReq) Reset() *opReq {
 	op.n = ""
 	op.v = nil
+
 	return op
 }
 
 type Router struct {
 	bg *BackgroudService
+	r  bool
 
-	nmap map[string]*EndPoint // used to find passive server
-	lmap map[string]*Listener // Service name
-
+	// Resource used to ask operation.
 	ops *ResourceManager
-	op  chan *op
+	op  chan *opReq
+
+	// Resources
+	ep_stop  bool
+	nmap     map[string]*EndPoint // used to find passive server
+	lis_stop bool
+	lmap     map[string]*Listener // Service name
 
 	// protect by clientOutMsgs, serverOutMsgs, inMsgs
 	out chan Payload
@@ -415,12 +438,14 @@ func NewRouter(logger *log.Logger, serve ServePayload) (*Router, error) {
 		r.bg = bg
 	}
 
+	r.r = true
+
 	r.lmap = make(map[string]*Listener)
 	r.nmap = make(map[string]*EndPoint)
 
 	op_num := 128
-	r.ops = NewResourceManager(op_num, func() interface{} { return new(op) })
-	r.op = make(chan *op, op_num)
+	r.op = make(chan *opReq, op_num)
+	r.ops = NewResourceManager(op_num, func() interface{} { op := new(opReq); op.ret = make(chan interface{}, 1); return op })
 
 	n := 1024
 	r.in = make(chan Payload, n)
@@ -450,17 +475,72 @@ func (r *Router) Run() {
 }
 
 func (r *Router) Stop() {
-	// Stop Listeners: No new EndPoint can be created.
-	for _, l := range r.lmap {
-		l.Stop()
+	if !r.r {
+		return
+	}
+	r.r = false
+
+	// S:Stop Listeners: No new connection can be accepted.
+	var op *opReq
+	op = r.ops.Get().(*opReq)
+	op.t = RouterOPStopAddListener
+	r.op <- op
+	if v := <-op.ret; v != nil {
+		panic("stop add listener returns nil")
 	}
 
-	// Stop Operations: No new EndPoint can be added.
-	// TODO: in progress RPC?
-	// Stop EndPoints: Server Shutdown/ClientShutdown.
-	for _, ep := range r.nmap {
-		ep.Stop()
+stopListener:
+	for {
+		op = r.ops.Get().(*opReq)
+		op.t = RouterOPStopListener
+		r.op <- op
+		v := <-op.ret
+		switch t := v.(type) {
+		case error:
+			if t == ErrOPListenerNotExist {
+				break stopListener
+			} else {
+				panic("")
+			}
+		case *Listener:
+			t.Stop()
+		default:
+			panic("stop listener returns nil")
+		}
 	}
+
+	// S/C:Stop EndPoints: Server Shutdown/Client Shutdown.
+	op = r.ops.Get().(*opReq)
+	op.t = RouterOPStopAddEndPoint
+	r.op <- op
+	if v := <-op.ret; v != nil {
+		panic("stop add endpoint returns nil")
+	}
+
+stopEndPoint:
+	for {
+		op = r.ops.Get().(*opReq)
+		op.t = RouterOPStopEndPoint
+		r.op <- op
+		v := <-op.ret
+		switch t := v.(type) {
+		case error:
+			if t == ErrOPEndPointNotExist {
+				break stopEndPoint
+			} else {
+				panic("")
+			}
+		case *EndPoint:
+			t.Stop()
+		default:
+			panic("stop endpoint returns nil")
+		}
+	}
+
+	// S/C:Stop Operations: No new EndPoint can be added.
+	r.ops.Close()
+
+	// C:TODO: in progress RPC?
 
 	// Reclaim resources
 	r.waiters.Close()
@@ -472,6 +552,9 @@ func (r *Router) Stop() {
 	r.bg.Stop()
 
 	// Close channels
+	close(r.op)
+	close(r.in)
+	close(r.out)
 }
 
 // call_done is a helper to notify sync CallWait()
@@ -552,89 +635,121 @@ func (r *Router) newHijackedEndPoint(name string, c net.Conn, mf MsgFactory, log
 }
 
 func (r *Router) AddEndPoint(ep *EndPoint) error {
-	op := r.ops.Get().(*op)
+	ep.Run()
+
+	op := r.ops.Get().(*opReq)
 
 	op.t = RouterOPAddEndPoint
 	op.v = ep
 
 	r.op <- op
-
-	return nil
+	v := <-op.ret
+	switch t := v.(type) {
+	case error:
+		return t
+	case nil:
+		return nil
+	default:
+		panic("AddEndPoint receive unexpected value")
+	}
 }
 
 func (r *Router) DelEndPoint(name string) error {
-	op := r.ops.Get().(*op)
+	op := r.ops.Get().(*opReq)
 
 	op.t = RouterOPDelEndPoint
 	op.n = name
 
 	r.op <- op
 
-	return nil
+	v := <-op.ret
+	switch t := v.(type) {
+	case error:
+		return t
+	case *EndPoint:
+		t.Stop()
+		return nil
+	default:
+		panic("del endpoint returns nil")
+	}
 }
 
 // For client/accepter
-func (r *Router) addEndPoint(ep *EndPoint) {
+func (r *Router) addEndPoint(ep *EndPoint) error {
 	if _, exist := r.nmap[ep.name]; !exist {
 		r.nmap[ep.name] = ep
-	} else {
-		// oops! come here again? It is possible if reconnect and name does
-		// not change.
+
+		return nil
 	}
 
-	return
+	return ErrOPAddEndPointExist
 }
 
 // TODO: useless function?
-func (r *Router) delEndPoint(name string) *EndPoint {
+func (r *Router) delEndPoint(name string) (*EndPoint, error) {
 	if ep, exist := r.nmap[name]; exist {
 		delete(r.nmap, name)
-		return ep
-	} else {
-		return nil
+		return ep, nil
 	}
+	return nil, ErrOPEndPointNotExist
 }
 
 // For server
 func (r *Router) AddListener(l *Listener) error {
-	op := r.ops.Get().(*op)
+	l.Run()
+
+	op := r.ops.Get().(*opReq)
 
 	op.t = RouterOPAddListener
 	op.v = l
 
 	r.op <- op
-
-	return nil
+	v := <-op.ret
+	switch t := v.(type) {
+	case error:
+		return t
+	case nil:
+		return nil
+	default:
+		panic("AddListener receive unexpected value")
+	}
 }
 
 func (r *Router) DelListener(name string) error {
-	op := r.ops.Get().(*op)
+	op := r.ops.Get().(*opReq)
 
 	op.t = RouterOPDelListener
 	op.n = name
 
 	r.op <- op
-
-	return nil
+	v := <-op.ret
+	switch t := v.(type) {
+	case error:
+		return t
+	case *Listener:
+		t.Stop()
+		return nil
+	default:
+		panic("del listeners failed")
+	}
 }
 
-func (r *Router) addListener(l *Listener) {
+func (r *Router) addListener(l *Listener) error {
 	if _, exist := r.lmap[l.name]; !exist {
 		r.lmap[l.name] = l
-	} else {
-		// oops! come here again?
-	}
-
-	return
-}
-
-func (r *Router) delListener(name string) *Listener {
-	if l, exist := r.lmap[name]; exist {
-		delete(r.lmap, name)
-		return l
-	} else {
 		return nil
 	}
+
+	return ErrOPAddListenerExist
+}
+
+func (r *Router) delListener(name string) (*Listener, error) {
+	if l, exist := r.lmap[name]; exist {
+		delete(r.lmap, name)
+		return l, nil
+	}
+
+	return nil, ErrOPListenerNotExist
 }
 
 func (r *Router) Dial(name string, network string, address string, mf MsgFactory) error {
@@ -644,7 +759,7 @@ func (r *Router) Dial(name string, network string, address string, mf MsgFactory
 		c.Close()
 		return err
 	} else if err := r.AddEndPoint(ep); err != nil {
-		// TODO: ep.Stop()
+		ep.Stop()
 		return err
 	}
 
@@ -668,6 +783,60 @@ func (r *Router) ListenAndServe(name string, network string, address string, mf 
 func (r *Router) StopLoop(force bool) {
 }
 
+func (r *Router) LoopProcessOperation(op *opReq) {
+	var ret interface{}
+
+	switch op.t {
+	case RouterOPAddEndPoint:
+		ep := op.v.(*EndPoint)
+		if r.ep_stop {
+			ret = ErrOPAddEndPointStopping
+		} else {
+			ret = r.addEndPoint(ep)
+		}
+	case RouterOPDelEndPoint:
+		if ep, err := r.delEndPoint(op.n); err != nil {
+			ret = err
+		} else {
+			ret = ep
+		}
+	case RouterOPAddListener:
+		l := op.v.(*Listener)
+		if r.lis_stop {
+			ret = ErrOPAddListenerStopping
+		} else {
+			ret = r.addListener(l)
+		}
+	case RouterOPDelListener:
+		if l, err := r.delListener(op.n); err != nil {
+			ret = err
+		} else {
+			ret = l
+		}
+
+	case RouterOPStopAddListener:
+		r.lis_stop = true
+	case RouterOPStopAddEndPoint:
+		r.ep_stop = true
+
+	case RouterOPStopListener:
+		ret = ErrOPListenerNotExist
+		for k := range r.lmap {
+			ret, _ = r.delListener(k)
+			break
+		}
+	case RouterOPStopEndPoint:
+		ret = ErrOPEndPointNotExist
+		for k := range r.nmap {
+			ret, _ = r.delEndPoint(k)
+			break
+		}
+	}
+
+	op.ret <- ret
+	r.ops.Put(op.Reset())
+}
+
 func (r *Router) Loop(quit chan struct{}) {
 forever:
 	for {
@@ -675,25 +844,7 @@ forever:
 		case <-quit:
 			break forever
 		case op := <-r.op:
-			switch op.t {
-			case RouterOPAddEndPoint:
-				ep := op.v.(*EndPoint)
-				r.addEndPoint(ep)
-				ep.Run()
-			case RouterOPDelEndPoint:
-				if ep := r.delEndPoint(op.n); ep != nil {
-					ep.Stop()
-				}
-			case RouterOPAddListener:
-				l := op.v.(*Listener)
-				r.addListener(l)
-				l.Run()
-			case RouterOPDelListener:
-				if l := r.delListener(op.n); l != nil {
-					l.Stop()
-				}
-			}
-			r.ops.Put(op.Reset())
+			r.LoopProcessOperation(op)
 		case p := <-r.out:
 			//r.logger.Printf("router: %v send: %T:%v", r, c.p, c.p)
 			out := p.(RoutePayload)
