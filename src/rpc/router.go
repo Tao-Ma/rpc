@@ -20,6 +20,8 @@ var (
 
 	ErrOutErrorEndPointNotExist error = &Error{err: "EndPoint does not exist"}
 	ErrOPRouterStopped          error = &Error{err: "Router stopped"}
+
+	ErrCallTimeout error = &Error{err: "Call timeout"}
 )
 
 type RPCInfo interface {
@@ -155,7 +157,7 @@ func (r *Router) Error(ep *EndPoint, err error) {
 }
 
 func (r *Router) Wrap(p Payload) RoutePayload {
-	// TODO: nil
+	// TODO: shutdown safe? nil?
 	in := r.inMsgs.Get().(*routeMsg)
 
 	in.Reset()
@@ -272,6 +274,8 @@ type routeMsg struct {
 
 	p Payload
 
+	to time.Time // ttl
+
 	cb  callback_func
 	arg callback_arg
 }
@@ -374,11 +378,7 @@ func (rm *routeMsg) Serve(r *Router) {
 	select {
 	case r.out <- out:
 	default:
-		select {
-		case r.out <- out:
-		case <-time.After(5):
-			// TODO:
-		}
+		panic("routeMsg leaks?!")
 	}
 }
 
@@ -590,31 +590,54 @@ func call_done(p Payload, arg callback_arg, err error) {
 }
 
 // Call sync
-func (r *Router) CallWait(ep string, rpc string, p Payload, n time.Duration) Payload {
+func (r *Router) CallWait(ep string, rpc string, p Payload, n time.Duration) (Payload, error) {
+	if n < 0 {
+		return nil, ErrCallTimeout
+	} else if n == 0 {
+		// long enough
+		n = 5 * time.Minute
+	} else {
+		n = n * time.Second
+	}
+
+	to := time.Now().Add(n)
+
 	var w *waiter
 	if v := r.waiters.Get(); v == nil {
-		// TODO: error
-		return nil
+		return nil, ErrOPRouterStopped
 	} else {
 		w = v.(*waiter)
 	}
 
 	// pass timeout information to Call.
-	r.Call(ep, rpc, p, call_done, w)
-
+	r.call(ep, rpc, p, call_done, w, to)
 	// wait result, rpc must returns something.
 	result := <-w.ch
 
 	r.waiters.Put(w)
 
-	return result
+	return result, nil
 }
 
 // Call async
-func (r *Router) Call(ep string, rpc string, p Payload, cb callback_func, arg callback_arg) {
+func (r *Router) Call(ep string, rpc string, p Payload, cb callback_func, arg callback_arg, n time.Duration) {
+	if n < 0 {
+		cb(nil, arg, ErrCallTimeout)
+		return
+	} else if n == 0 {
+		n = 5 * time.Minute
+	} else {
+		n = n * time.Second
+	}
+
+	r.call(ep, rpc, p, cb, arg, time.Now().Add(n))
+}
+
+func (r *Router) call(ep string, rpc string, p Payload, cb callback_func, arg callback_arg, to time.Time) {
 	var out *routeMsg
 	if v := r.clientOutMsgs.Get(); v == nil {
-		// TODO: callback
+		cb(nil, arg, ErrOPRouterStopped)
+		return
 	} else {
 		out = v.(*routeMsg)
 	}
@@ -632,22 +655,17 @@ func (r *Router) Call(ep string, rpc string, p Payload, cb callback_func, arg ca
 
 	out.cb = cb
 	out.arg = arg
+	out.to = to
 
 	select {
 	case r.out <- out:
 	default:
-		select {
-		case r.out <- out:
-		case <-time.Tick(0):
-			// TODO: timeout!
-			// TODO: RouteRPCPayload
-			go cb(nil, arg, nil)
-		}
+		panic("routeMsg leaks?!")
 	}
 }
 
 func (r *Router) Write(ep string, p Payload) {
-	r.Call(ep, "", p, nil, nil)
+	r.Call(ep, "", p, nil, nil, 0)
 }
 
 // route()/hijack()
@@ -963,7 +981,3 @@ func (r *Router) RpcIn(in RouteRPCPayload) RouteRPCPayload {
 		return out
 	}
 }
-
-// route rule
-// Error
-// EndPoint/Listener must send join/left msg to sync with others!

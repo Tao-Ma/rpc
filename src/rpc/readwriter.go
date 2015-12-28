@@ -7,7 +7,6 @@ import (
 	"io"
 	"log"
 	"os"
-	"time"
 )
 
 var (
@@ -186,12 +185,7 @@ func (w *Writer) Write(p Payload) error {
 	select {
 	case ch <- p:
 	default:
-		select {
-		case ch <- p:
-		case <-time.Tick(0 * time.Second):
-			// TODO: timeout
-			return nil
-		}
+		panic("channel ref leaks?!")
 	}
 
 	w.rm.Put(ch)

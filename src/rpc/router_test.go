@@ -72,7 +72,7 @@ func TestRouterSingle(t *testing.T) {
 	req.Id = proto.Uint64(1)
 
 	done := make(chan bool)
-	r.Call("scheduler", "rpc", req, ClientProcessReponse, done)
+	r.Call("scheduler", "rpc", req, ClientProcessReponse, done, 0)
 	<-done
 
 	r.Stop()
@@ -106,8 +106,8 @@ func TestRouterMultiple(t *testing.T) {
 	for i := 1; i < 10000; i++ {
 		req := NewResourceReq()
 		req.Id = proto.Uint64(uint64(i))
-		if resp := r.CallWait(name, "rpc", req, 5); resp == nil {
-			t.Log("CallWait timeout: ", i)
+		if _, err := r.CallWait(name, "rpc", req, 5); err != nil {
+			t.Log(i, ":", err)
 			t.FailNow()
 		}
 	}
@@ -345,9 +345,9 @@ func testSeperateRouter(b *testing.B, server_r *Router, client_r *Router, n int)
 			req := NewResourceReq()
 			req.Id = proto.Uint64(1)
 			i := rand.Intn(n)
-			//r.Call("scheduler", req, ClientProcessReponseIgnore, nil)
-			if resp := client_r.CallWait(name+string(i), "rpc", req, 5); resp == nil {
-				b.Log("CallWait timeout")
+			//r.Call("scheduler", req, ClientProcessReponseIgnore, nil, 0)
+			if _, err := client_r.CallWait(name+string(i), "rpc", req, 5); err != nil {
+				b.Log(err)
 				b.FailNow()
 			}
 		}
