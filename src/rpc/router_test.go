@@ -397,8 +397,8 @@ func BenchmarkTCPReconnectRouter(b *testing.B) {
 				b.FailNow()
 			}
 
-			if resp := r.CallWait(name, "rpc", req, 5); resp == nil {
-				b.Log("CallWait timeout")
+			if _, err := r.CallWait(name, "rpc", req, 5); err != nil {
+				b.Log(err)
 				b.FailNow()
 			}
 			r.Stop()

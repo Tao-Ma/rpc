@@ -13,10 +13,17 @@ ___
 
 TODO
 ___
-- Support 'grpc' register feature
-- Error/log
-- Defer socket/listener/...
-- Reuse Reader/Writer/EndPoint
+- Support 'grpc' register server feature
+- Reuse EndPoint
+- Reuse Reader/Writer
+- Error
+- Log
+- Support Reader/Writer timeout(Defer/Deadline)
 - Ensure opReq.ret is resuable and concurrent safe
-- Call timeout
+- Test Call timeout
 - Route Rule
+- Performance: Use lower level event module/shareReader/shareWriter
+- Security transport
+- Http Message
+- Http 2.0
+- grpc compatible
