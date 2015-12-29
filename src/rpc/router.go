@@ -20,8 +20,6 @@ var (
 
 	ErrOutErrorEndPointNotExist error = &Error{err: "EndPoint does not exist"}
 	ErrOPRouterStopped          error = &Error{err: "Router stopped"}
-
-	ErrCallTimeout error = &Error{err: "Call timeout"}
 )
 
 type RPCInfo interface {
@@ -186,87 +184,9 @@ func (ep *EndPoint) write(p RoutePayload) error {
 	return ep.w.Write(p.(Payload))
 }
 
-type Listener struct {
-	name string
-	l    net.Listener
-
-	mf MsgFactory
-
-	r     *Router
-	serve ServeConn
-
-	bg *BackgroudService
-}
-
-func NewListener(name string, listener net.Listener, mf MsgFactory, r *Router, serve ServeConn) (*Listener, error) {
-	l := new(Listener)
-
-	if bg, err := NewBackgroundService(l); err != nil {
-		return nil, err
-	} else {
-		l.bg = bg
-	}
-
-	l.name = name
-	l.l = listener
-	l.mf = mf
-
-	// TODO: change this to interface
-	l.r = r
-	l.serve = serve
-
-	return l, nil
-}
-
-func (l *Listener) Run() {
-	l.bg.Run()
-}
-
-func (l *Listener) Stop() {
-	l.bg.Stop()
-}
-
-func (l *Listener) StopLoop(force bool) {
-	l.l.Close()
-}
-
-func (l *Listener) Loop(q chan struct{}) {
-	go l.accepter()
-
-	select {
-	case <-q:
-		l.StopLoop(false)
-	}
-	// TODO: wait ?
-}
-
-func (l *Listener) accepter() {
-	for {
-		if c, err := l.l.Accept(); err != nil {
-			// TODO: log?
-			break
-		} else if l.serve != nil && l.serve(l.r, c) {
-			// TODO: serve
-		} else if ep := l.r.newRouterEndPoint(l.name+c.RemoteAddr().String(), c, l.mf); ep == nil {
-			c.Close()
-			break
-		} else if err := l.r.AddEndPoint(ep); err != nil {
-			ep.Stop()
-		} else {
-			//l.r.logger.Print(ep)
-		}
-	}
-}
-
 // serve
 type callback_func func(Payload, callback_arg, error)
 type callback_arg interface{}
-
-type waiter struct {
-	ch chan Payload
-	// where we belones to
-	r *Router
-}
 
 type routeMsg struct {
 	id  uint64
@@ -375,44 +295,6 @@ func (rm *routeMsg) Timeout(now time.Time) {
 		delete(r.calls, rm.GetRPCID())
 		r.inMsgs.Put(out)
 	}
-}
-
-// mock
-func serve_done(p Payload, arg callback_arg, err error) {
-	// Reclaim
-}
-
-func (rm *routeMsg) Serve(r *Router) {
-	// TODO: Get the serve info
-	// rm.rpc is used to locate method
-
-	reply := r.serve(r, rm.ep_name, rm.p)
-
-	// TODO: nil?
-	out := r.serverOutMsgs.Get().(*routeMsg)
-
-	out.ep_name = rm.ep_name
-	out.rpc = rm.rpc
-	out.id = rm.id
-
-	out.p = reply
-
-	out.is_rpc = true
-	out.is_request = false
-
-	out.cb = serve_done
-	out.r = r
-
-	select {
-	case r.out <- out:
-	default:
-		panic("routeMsg leaks?!")
-	}
-}
-
-func (rm *routeMsg) Return(r *Router, reply RouteRPCPayload) {
-	go rm.cb(reply.GetPayload(), rm.arg, nil)
-	r.clientOutMsgs.Put(rm)
 }
 
 const (
@@ -609,63 +491,6 @@ stopEndPoint:
 	close(r.out)
 }
 
-// call_done is a helper to notify sync CallWait()
-func call_done(p Payload, arg callback_arg, err error) {
-	// TODO: timeout case may crash? Take care of the race condition!
-	if w, ok := arg.(*waiter); !ok {
-		panic("call_done")
-	} else if err != nil {
-		// TODO: error ?
-		w.ch <- nil
-	} else {
-		w.ch <- p
-	}
-}
-
-// Call sync
-func (r *Router) CallWait(ep string, rpc string, p Payload, n time.Duration) (Payload, error) {
-	if n < 0 {
-		return nil, ErrCallTimeout
-	} else if n == 0 {
-		// long enough
-		n = 5 * time.Minute
-	} else {
-		n = n * time.Second
-	}
-
-	to := time.Now().Add(n)
-
-	var w *waiter
-	if v := r.waiters.Get(); v == nil {
-		return nil, ErrOPRouterStopped
-	} else {
-		w = v.(*waiter)
-	}
-
-	// pass timeout information to Call.
-	r.call(ep, rpc, p, call_done, w, to)
-	// wait result, rpc must returns something.
-	result := <-w.ch
-
-	r.waiters.Put(w)
-
-	return result, nil
-}
-
-// Call async
-func (r *Router) Call(ep string, rpc string, p Payload, cb callback_func, arg callback_arg, n time.Duration) {
-	if n < 0 {
-		cb(nil, arg, ErrCallTimeout)
-		return
-	} else if n == 0 {
-		n = 5 * time.Minute
-	} else {
-		n = n * time.Second
-	}
-
-	r.call(ep, rpc, p, cb, arg, time.Now().Add(n))
-}
-
 func (r *Router) call(ep string, rpc string, p Payload, cb callback_func, arg callback_arg, to time.Time) {
 	var out *routeMsg
 	if v := r.clientOutMsgs.Get(); v == nil {
@@ -702,12 +527,6 @@ func (r *Router) call(ep string, rpc string, p Payload, cb callback_func, arg ca
 func (r *Router) Write(ep string, p Payload) {
 	r.Call(ep, "", p, nil, nil, 0)
 }
-
-// route()/hijack()
-type ServeConn func(*Router, net.Conn) bool
-
-// FIXME: Payload -> bool
-type ServePayload func(*Router, string, Payload) Payload
 
 func (r *Router) newRouterEndPoint(name string, c net.Conn, mf MsgFactory) *EndPoint {
 	return NewEndPoint(name, c, make(chan Payload, 1024), r.in, mf, r, r.logger)

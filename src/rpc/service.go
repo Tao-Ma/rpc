@@ -16,8 +16,3 @@ type Service interface {
 
 	StopLoop(force bool)
 }
-
-type BGService interface {
-	Stop() error
-	Run()
-}
