@@ -978,6 +978,7 @@ func (r *Router) RpcIn(in RouteRPCPayload) RouteRPCPayload {
 		// timeout or cancel, the callback should be called.
 		return nil
 	} else {
+		delete(r.calls, id)
 		return out
 	}
 }
