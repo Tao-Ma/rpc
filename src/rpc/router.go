@@ -30,6 +30,10 @@ type RPCInfo interface {
 	GetRPCName() string
 	SetRPCName(string)
 
+	GetTrackID() TrackID
+	SetTrackID(TrackID)
+	TrackObject
+
 	IsRequest() bool
 	SetIsRequest()
 	IsReply() bool
@@ -265,7 +269,8 @@ type waiter struct {
 }
 
 type routeMsg struct {
-	id uint64
+	id  uint64
+	tid TrackID
 
 	ep_name    string
 	rpc        string
@@ -274,6 +279,7 @@ type routeMsg struct {
 
 	p Payload
 
+	r  *Router   // owner
 	to time.Time // ttl
 
 	cb  callback_func
@@ -337,6 +343,14 @@ func (rm *routeMsg) SetRPCID(id uint64) {
 	rm.id = id
 }
 
+func (rm *routeMsg) GetTrackID() TrackID {
+	return rm.tid
+}
+
+func (rm *routeMsg) SetTrackID(tid TrackID) {
+	rm.tid = tid
+}
+
 func (rm *routeMsg) GetRPCName() string {
 	return rm.rpc
 }
@@ -348,6 +362,19 @@ func (rm *routeMsg) SetRPCName(rpc string) {
 func (rm *routeMsg) Error(err error) {
 	// TODO: router?
 	rm.cb(nil, rm.arg, err)
+}
+
+func (rm *routeMsg) When() time.Time {
+	return rm.to
+}
+
+func (rm *routeMsg) Timeout(now time.Time) {
+	go rm.cb(nil, rm.arg, ErrCallTimeout)
+	r := rm.r
+	if out, exist := r.calls[rm.GetRPCID()]; exist {
+		delete(r.calls, rm.GetRPCID())
+		r.inMsgs.Put(out)
+	}
 }
 
 // mock
@@ -374,6 +401,7 @@ func (rm *routeMsg) Serve(r *Router) {
 	out.is_request = false
 
 	out.cb = serve_done
+	out.r = r
 
 	select {
 	case r.out <- out:
@@ -441,6 +469,8 @@ type Router struct {
 	next  uint64
 	calls map[uint64]RouteRPCPayload
 
+	tt *TimeoutTracker
+
 	serve ServePayload
 
 	timeout time.Duration
@@ -473,6 +503,7 @@ func NewRouter(logger *log.Logger, serve ServePayload) (*Router, error) {
 	r.waiters = NewResourceManager(n, func() interface{} { w := new(waiter); w.ch = make(chan Payload, 1); w.r = r; return w })
 	r.calls = make(map[uint64]RouteRPCPayload)
 	r.next = 1
+	r.tt, _ = NewTimeoutTracker(100, n)
 
 	r.clientOutMsgs = NewResourceManager(n, func() interface{} { return new(routeMsg) })
 	r.serverOutMsgs = NewResourceManager(n, func() interface{} { return new(routeMsg) })
@@ -560,6 +591,8 @@ stopEndPoint:
 	r.ops.Close()
 
 	// C:TODO: in progress RPC?
+
+	r.tt.Stop()
 
 	// Reclaim resources
 	r.waiters.Close()
@@ -656,6 +689,8 @@ func (r *Router) call(ep string, rpc string, p Payload, cb callback_func, arg ca
 	out.cb = cb
 	out.arg = arg
 	out.to = to
+
+	out.r = r
 
 	select {
 	case r.out <- out:
@@ -912,6 +947,9 @@ forever:
 			break forever
 		case op := <-r.op:
 			r.LoopProcessOperation(op)
+
+		case now := <-r.tt.Tick():
+			r.tt.TimeoutCheck(now)
 		case p := <-r.out:
 			//r.logger.Printf("router: %v send: %T:%v", r, c.p, c.p)
 			out := p.(RoutePayload)
@@ -965,6 +1003,8 @@ func (r *Router) RpcOut(out RouteRPCPayload) {
 		panic("RpcOut id duplicate")
 	} else {
 		r.calls[out.GetRPCID()] = out
+		id, _ := r.tt.Add(out)
+		out.SetTrackID(id)
 	}
 }
 
@@ -979,6 +1019,7 @@ func (r *Router) RpcIn(in RouteRPCPayload) RouteRPCPayload {
 		return nil
 	} else {
 		delete(r.calls, id)
+		r.tt.Del(out.GetTrackID())
 		return out
 	}
 }
