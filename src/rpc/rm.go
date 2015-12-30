@@ -7,13 +7,18 @@ import ()
 
 var ()
 
-type new_func func() interface{}
+type Resource interface {
+	// Reset()
+	SetOwner(*ResourceManager) Resource
+}
+
+type new_func func() Resource
 
 type ResourceManager struct {
 	n int
 	r bool
 
-	ch chan interface{}
+	ch chan Resource
 }
 
 func NewResourceManager(n int, f new_func) *ResourceManager {
@@ -21,10 +26,10 @@ func NewResourceManager(n int, f new_func) *ResourceManager {
 
 	rm.n = n
 
-	rm.ch = make(chan interface{}, n)
+	rm.ch = make(chan Resource, n)
 
 	for i := 0; i < n; i++ {
-		rm.ch <- f()
+		rm.ch <- f().SetOwner(rm)
 	}
 
 	rm.r = true
@@ -38,7 +43,7 @@ func (rm *ResourceManager) Close() {
 	}
 
 	for rm.n > 0 {
-		if v := rm.Get(); v != nil {
+		if r := rm.Get(); r != nil {
 			rm.n--
 		}
 	}
@@ -47,15 +52,15 @@ func (rm *ResourceManager) Close() {
 	rm.r = false
 }
 
-func (rm *ResourceManager) Get() interface{} {
+func (rm *ResourceManager) Get() Resource {
 	select {
-	case v := <-rm.ch:
-		return v
+	case r := <-rm.ch:
+		return r
 	}
 }
 
-func (rm *ResourceManager) Put(v interface{}) {
+func (rm *ResourceManager) Put(r Resource) {
 	select {
-	case rm.ch <- v:
+	case rm.ch <- r:
 	}
 }

@@ -11,8 +11,22 @@ import (
 type waiter struct {
 	ch chan Payload
 
+	owner *ResourceManager
+
 	// where we belones to
 	r *Router
+}
+
+func (w *waiter) Recycle() {
+	w.owner.Put(w)
+}
+
+func (w *waiter) Reset() {
+}
+
+func (w *waiter) SetOwner(o *ResourceManager) Resource {
+	w.owner = o
+	return w
 }
 
 // call_done is a helper to notify sync CallWait()
@@ -53,7 +67,7 @@ func (r *Router) CallWait(ep string, rpc string, p Payload, n time.Duration) (Pa
 	// wait result, rpc must returns something.
 	result := <-w.ch
 
-	r.waiters.Put(w)
+	w.Recycle()
 
 	return result, nil
 }

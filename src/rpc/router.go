@@ -43,11 +43,12 @@ type RouteRPCPayload interface {
 	RPCInfo
 
 	// Run inside router goroutine
-	Serve(*Router)
+	Serve(*Router, string, string, uint64, Payload)
 	Return(*Router, RouteRPCPayload)
 }
 
 type RoutePayload interface {
+	Resource
 	IsRPC() bool
 	SetIsRPC()
 
@@ -167,12 +168,12 @@ func (r *Router) Wrap(p Payload) RoutePayload {
 func (r *Router) Unwrap(p RoutePayload) Payload {
 	if m, ok := p.(*routeMsg); ok {
 		if !m.IsRPC() || !m.IsRequest() {
-			r.serverOutMsgs.Put(m)
+			m.Recycle()
 		}
 		return m.p
 	}
 
-	// XXX: error?
+	panic("Router.Unwrap invalid type")
 	return p
 }
 
@@ -183,6 +184,8 @@ func (ep *EndPoint) write(p RoutePayload) error {
 type routeMsg struct {
 	id  uint64
 	tid TrackID
+
+	owner *ResourceManager
 
 	ep_name    string
 	rpc        string
@@ -196,6 +199,15 @@ type routeMsg struct {
 
 	cb  RPCCallback_func
 	arg RPCCallback_arg
+}
+
+func (rm *routeMsg) Recycle() {
+	rm.owner.Put(rm)
+}
+
+func (rm *routeMsg) SetOwner(o *ResourceManager) Resource {
+	rm.owner = o
+	return rm
 }
 
 func (rm *routeMsg) Reset() *routeMsg {
@@ -285,7 +297,8 @@ func (rm *routeMsg) Timeout(now time.Time) {
 	r := rm.r
 	if out, exist := r.calls[rm.GetRPCID()]; exist {
 		delete(r.calls, rm.GetRPCID())
-		r.inMsgs.Put(out)
+		// TODO: Redesign the api
+		out.(*routeMsg).Recycle()
 	}
 }
 
@@ -307,6 +320,17 @@ type opReq struct {
 
 	// error or object
 	ret chan interface{}
+
+	owner *ResourceManager
+}
+
+func (op *opReq) Recycle() {
+	op.owner.Put(op)
+}
+
+func (op *opReq) SetOwner(o *ResourceManager) Resource {
+	op.owner = o
+	return op
 }
 
 func (op *opReq) Reset() *opReq {
@@ -368,20 +392,20 @@ func NewRouter(logger *log.Logger, serve ServePayload) (*Router, error) {
 
 	op_num := 128
 	r.op = make(chan *opReq, op_num)
-	r.ops = NewResourceManager(op_num, func() interface{} { op := new(opReq); op.ret = make(chan interface{}, 1); return op })
+	r.ops = NewResourceManager(op_num, func() Resource { op := new(opReq); op.ret = make(chan interface{}, 1); return op })
 
 	n := 1024
 	r.in = make(chan Payload, n)
-	r.out = make(chan Payload, n)
+	r.out = make(chan Payload, n*2)
 
-	r.waiters = NewResourceManager(n, func() interface{} { w := new(waiter); w.ch = make(chan Payload, 1); w.r = r; return w })
+	r.waiters = NewResourceManager(n, func() Resource { w := new(waiter); w.ch = make(chan Payload, 1); w.r = r; return w })
 	r.calls = make(map[uint64]RouteRPCPayload)
 	r.next = 1
 	r.tt, _ = NewTimeoutTracker(100, n)
 
-	r.clientOutMsgs = NewResourceManager(n, func() interface{} { return new(routeMsg) })
-	r.serverOutMsgs = NewResourceManager(n, func() interface{} { return new(routeMsg) })
-	r.inMsgs = NewResourceManager(n, func() interface{} { return new(routeMsg) })
+	r.clientOutMsgs = NewResourceManager(n, func() Resource { return new(routeMsg) })
+	r.serverOutMsgs = NewResourceManager(n, func() Resource { return new(routeMsg) })
+	r.inMsgs = NewResourceManager(n, func() Resource { return new(routeMsg) })
 
 	r.serve = serve
 
@@ -576,7 +600,8 @@ func (r *Router) DelEndPoint(name string) error {
 	case error:
 		return t
 	case *EndPoint:
-		t.Stop()
+		// TODO: task queue
+		go t.Stop()
 		return nil
 	default:
 		panic("del endpoint returns nil")
@@ -648,7 +673,8 @@ func (r *Router) DelListener(name string) error {
 	case error:
 		return t
 	case *Listener:
-		t.Stop()
+		// TODO: task queue
+		go t.Stop()
 		return nil
 	default:
 		panic("del listeners failed")
@@ -758,7 +784,7 @@ func (r *Router) LoopProcessOperation(op *opReq) {
 	op.ret <- ret
 	close(op.ret)
 	op.ret = make(chan interface{}, 1)
-	r.ops.Put(op.Reset())
+	op.Reset().Recycle()
 }
 
 func (r *Router) Loop(quit chan struct{}) {
@@ -784,21 +810,30 @@ forever:
 
 			if ep, exist := r.nmap[out.GetEPName()]; exist {
 				//r.logger.Printf("router: %v rpcout: %T:%v", r, c.p, c.p)
-				ep.write(out)
+				if err := ep.write(out); err != nil {
+					go out.Error(err)
+					// TODO: redesign the api
+					out.(*routeMsg).Recycle()
+				}
 			} else {
 				// race condition: Dial() is later than Call()
 				go out.Error(ErrOutErrorEndPointNotExist)
+				// TODO: redesign the api
+				out.(*routeMsg).Recycle()
 			}
 		case p := <-r.in:
 			//r.logger.Printf("router: %v recv: %T:%v", r, p, p)
 			in := p.(RoutePayload)
+			rm := in.(*routeMsg)
 
 			// TODO: apply route rule
 
 			if in.IsRPC() {
 				if in.(RouteRPCPayload).IsRequest() {
 					// rpc request
-					in.(RouteRPCPayload).Serve(r)
+					// TODO: task queue
+					// TODO: server api
+					go in.(RouteRPCPayload).Serve(r, rm.ep_name, rm.rpc, rm.id, rm.p)
 				} else if out := r.RpcIn(in.(RouteRPCPayload)); out != nil {
 					// rpc reply
 					out.Return(r, in.(RouteRPCPayload))
@@ -809,7 +844,8 @@ forever:
 				// TODO: msg
 				go r.serve(r, in.GetEPName(), in.GetPayload())
 			}
-			r.inMsgs.Put(in)
+			// TODO: redesign the api
+			in.(*routeMsg).Recycle()
 		}
 	}
 }

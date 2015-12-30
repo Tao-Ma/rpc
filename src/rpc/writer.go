@@ -9,6 +9,35 @@ import (
 	"os"
 )
 
+var (
+	ErrWriterClosed error = &Error{err: "Writer closed"}
+)
+
+type PayloadChan struct {
+	ch chan Payload
+
+	owner *ResourceManager
+}
+
+func NewPayloadChan(ch chan Payload) *PayloadChan {
+	pc := new(PayloadChan)
+	pc.ch = ch
+	return pc
+}
+
+func (pc *PayloadChan) Reset() {
+	// do nothing
+}
+
+func (pc *PayloadChan) Recycle() {
+	pc.owner.Put(pc)
+}
+
+func (pc *PayloadChan) SetOwner(o *ResourceManager) Resource {
+	pc.owner = o
+	return pc
+}
+
 type Writer struct {
 	bg *BackgroudService
 
@@ -45,7 +74,7 @@ func NewWriter(conn io.WriteCloser, io IOChannel, mb MsgBuffer, logger *log.Logg
 
 	w.io = io
 
-	w.rm = NewResourceManager(128, func() interface{} { return io.Out() })
+	w.rm = NewResourceManager(128, func() Resource { return NewPayloadChan(io.Out()) })
 
 	w.maxlen = 4096
 	w.b = make([]byte, w.mb.GetHdrLen()+w.maxlen)
@@ -117,22 +146,18 @@ func (w *Writer) Loop(q chan struct{}) {
 }
 
 func (w *Writer) Write(p Payload) error {
-	// TODO: get token
-	// Detect channel closed by nil
-
-	ch := w.rm.Get().(chan Payload)
+	ch := w.rm.Get().(*PayloadChan)
 	if ch == nil {
-		// TODO: closed
-		return nil
+		return ErrWriterClosed
 	}
 
 	select {
-	case ch <- p:
+	case ch.ch <- p:
 	default:
 		panic("channel ref leaks?!")
 	}
 
-	w.rm.Put(ch)
+	ch.Recycle()
 
 	return nil
 }

@@ -18,18 +18,18 @@ func serve_done(p Payload, arg RPCCallback_arg, err error) {
 	// Reclaim
 }
 
-func (rm *routeMsg) Serve(r *Router) {
+func (rm *routeMsg) Serve(r *Router, ep_name string, rpc string, id uint64, p Payload) {
 	// TODO: Get the serve info
 	// rm.rpc is used to locate method
 
-	reply := r.serve(r, rm.ep_name, rm.p)
+	reply := r.serve(r, ep_name, p)
 
 	// TODO: nil?
 	out := r.serverOutMsgs.Get().(*routeMsg)
 
-	out.ep_name = rm.ep_name
-	out.rpc = rm.rpc
-	out.id = rm.id
+	out.ep_name = ep_name
+	out.rpc = rpc
+	out.id = id
 
 	out.p = reply
 
@@ -48,5 +48,5 @@ func (rm *routeMsg) Serve(r *Router) {
 
 func (rm *routeMsg) Return(r *Router, reply RouteRPCPayload) {
 	go rm.cb(reply.GetPayload(), rm.arg, nil)
-	r.clientOutMsgs.Put(rm)
+	rm.Recycle()
 }
