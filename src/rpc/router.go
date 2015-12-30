@@ -408,8 +408,9 @@ func (r *Router) Stop() {
 	var op *opReq
 	op = r.ops.Get().(*opReq)
 	op.t = RouterOPStopAddListener
+	ch := op.ret
 	r.op <- op
-	if v := <-op.ret; v != nil {
+	if v := <-ch; v != nil {
 		panic("stop add listener returns nil")
 	}
 
@@ -417,8 +418,9 @@ stopListener:
 	for {
 		op = r.ops.Get().(*opReq)
 		op.t = RouterOPStopListener
+		ch := op.ret
 		r.op <- op
-		v := <-op.ret
+		v := <-ch
 		switch t := v.(type) {
 		case error:
 			if t == ErrOPListenerNotExist {
@@ -436,8 +438,9 @@ stopListener:
 	// S/C:Stop EndPoints: Server Shutdown/Client Shutdown.
 	op = r.ops.Get().(*opReq)
 	op.t = RouterOPStopAddEndPoint
+	ch = op.ret
 	r.op <- op
-	if v := <-op.ret; v != nil {
+	if v := <-ch; v != nil {
 		panic("stop add endpoint returns nil")
 	}
 
@@ -445,8 +448,9 @@ stopEndPoint:
 	for {
 		op = r.ops.Get().(*opReq)
 		op.t = RouterOPStopEndPoint
+		ch = op.ret
 		r.op <- op
-		v := <-op.ret
+		v := <-ch
 		switch t := v.(type) {
 		case error:
 			if t == ErrOPEndPointNotExist {
@@ -538,15 +542,17 @@ func (r *Router) AddEndPoint(ep *EndPoint) error {
 
 	op.t = RouterOPAddEndPoint
 	op.v = ep
+	ch := op.ret
 
 	r.op <- op
-	v := <-op.ret
+	v := <-ch
 	switch t := v.(type) {
 	case error:
 		return t
 	case nil:
 		return nil
 	default:
+		r.logger.Print(t)
 		panic("AddEndPoint receive unexpected value")
 	}
 }
@@ -561,10 +567,11 @@ func (r *Router) DelEndPoint(name string) error {
 
 	op.t = RouterOPDelEndPoint
 	op.n = name
+	ch := op.ret
 
 	r.op <- op
 
-	v := <-op.ret
+	v := <-ch
 	switch t := v.(type) {
 	case error:
 		return t
@@ -609,9 +616,10 @@ func (r *Router) AddListener(l *Listener) error {
 
 	op.t = RouterOPAddListener
 	op.v = l
+	ch := op.ret
 
 	r.op <- op
-	v := <-op.ret
+	v := <-ch
 	switch t := v.(type) {
 	case error:
 		return t
@@ -632,9 +640,10 @@ func (r *Router) DelListener(name string) error {
 
 	op.t = RouterOPDelListener
 	op.n = name
+	ch := op.ret
 
 	r.op <- op
-	v := <-op.ret
+	v := <-ch
 	switch t := v.(type) {
 	case error:
 		return t
@@ -747,6 +756,8 @@ func (r *Router) LoopProcessOperation(op *opReq) {
 	}
 
 	op.ret <- ret
+	close(op.ret)
+	op.ret = make(chan interface{}, 1)
 	r.ops.Put(op.Reset())
 }
 
