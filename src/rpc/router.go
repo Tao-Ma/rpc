@@ -38,10 +38,6 @@ type RPCInfo interface {
 	SetIsReply()
 }
 
-type Payload interface {
-	// Raw
-}
-
 type RouteRPCPayload interface {
 	RoutePayload
 	RPCInfo
@@ -184,10 +180,6 @@ func (ep *EndPoint) write(p RoutePayload) error {
 	return ep.w.Write(p.(Payload))
 }
 
-// serve
-type callback_func func(Payload, callback_arg, error)
-type callback_arg interface{}
-
 type routeMsg struct {
 	id  uint64
 	tid TrackID
@@ -202,8 +194,8 @@ type routeMsg struct {
 	r  *Router   // owner
 	to time.Time // ttl
 
-	cb  callback_func
-	arg callback_arg
+	cb  RPCCallback_func
+	arg RPCCallback_arg
 }
 
 func (rm *routeMsg) Reset() *routeMsg {
@@ -491,7 +483,7 @@ stopEndPoint:
 	close(r.out)
 }
 
-func (r *Router) call(ep string, rpc string, p Payload, cb callback_func, arg callback_arg, to time.Time) {
+func (r *Router) call(ep string, rpc string, p Payload, cb RPCCallback_func, arg RPCCallback_arg, to time.Time) {
 	var out *routeMsg
 	if v := r.clientOutMsgs.Get(); v == nil {
 		cb(nil, arg, ErrOPRouterStopped)

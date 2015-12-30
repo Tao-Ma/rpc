@@ -14,7 +14,7 @@ type ServeConn func(*Router, net.Conn) bool
 type ServePayload func(*Router, string, Payload) Payload
 
 // mock
-func serve_done(p Payload, arg callback_arg, err error) {
+func serve_done(p Payload, arg RPCCallback_arg, err error) {
 	// Reclaim
 }
 

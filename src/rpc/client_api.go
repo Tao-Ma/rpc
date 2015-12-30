@@ -7,18 +7,16 @@ import (
 	"time"
 )
 
-var (
-	ErrCallTimeout error = &Error{err: "Call timeout"}
-)
-
+// invisible to outside, reduce the GC pressure.
 type waiter struct {
 	ch chan Payload
+
 	// where we belones to
 	r *Router
 }
 
 // call_done is a helper to notify sync CallWait()
-func call_done(p Payload, arg callback_arg, err error) {
+func call_done(p Payload, arg RPCCallback_arg, err error) {
 	// TODO: timeout case may crash? Take care of the race condition!
 	if w, ok := arg.(*waiter); !ok {
 		panic("call_done")
@@ -61,7 +59,7 @@ func (r *Router) CallWait(ep string, rpc string, p Payload, n time.Duration) (Pa
 }
 
 // Call async
-func (r *Router) Call(ep string, rpc string, p Payload, cb callback_func, arg callback_arg, n time.Duration) {
+func (r *Router) Call(ep string, rpc string, p Payload, cb RPCCallback_func, arg RPCCallback_arg, n time.Duration) {
 	if n < 0 {
 		cb(nil, arg, ErrCallTimeout)
 		return

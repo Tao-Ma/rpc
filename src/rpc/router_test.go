@@ -37,12 +37,12 @@ func ServiceProcessPayload(r *Router, name string, p Payload) Payload {
 	}
 }
 
-func ClientProcessReponse(p Payload, arg callback_arg, err error) {
+func ClientProcessReponse(p Payload, arg RPCCallback_arg, err error) {
 	done := arg.(chan bool)
 	done <- true
 }
 
-func ClientProcessReponseIgnore(p Payload, arg callback_arg, err error) {
+func ClientProcessReponseIgnore(p Payload, arg RPCCallback_arg, err error) {
 }
 
 func TestRouterSingle(t *testing.T) {
