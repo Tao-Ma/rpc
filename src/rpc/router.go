@@ -313,13 +313,41 @@ const (
 	RouterOPStopListener
 )
 
+type Chan struct {
+	ch chan interface{}
+
+	owner *ResourceManager
+}
+
+func NewChan() *Chan {
+	ch := new(Chan)
+	ch.ch = make(chan interface{}, 1)
+	return ch
+}
+
+func (ch *Chan) SetOwner(o *ResourceManager) Resource {
+	ch.owner = o
+	return ch
+}
+
+func (ch *Chan) Recycle() {
+	ch.owner.Put(ch)
+}
+
+func (ch *Chan) Reset() Resource {
+	// do nothing
+	return ch
+}
+
 type opReq struct {
 	t int
 	n string
+
+	// ref
 	v interface{}
 
 	// error or object
-	ret chan interface{}
+	ret *Chan
 
 	owner *ResourceManager
 }
@@ -345,8 +373,9 @@ type Router struct {
 	r  bool
 
 	// Resource used to ask operation.
-	ops *ResourceManager
-	op  chan *opReq
+	ops   *ResourceManager // operation request
+	opchs *ResourceManager // operation request notify channel
+	op    chan *opReq
 
 	// Resources
 	ep_stop  bool
@@ -392,7 +421,8 @@ func NewRouter(logger *log.Logger, serve ServePayload) (*Router, error) {
 
 	op_num := 128
 	r.op = make(chan *opReq, op_num)
-	r.ops = NewResourceManager(op_num, func() Resource { op := new(opReq); op.ret = make(chan interface{}, 1); return op })
+	r.ops = NewResourceManager(op_num, func() Resource { op := new(opReq); return op })
+	r.opchs = NewResourceManager(op_num, func() Resource { return NewChan() })
 
 	n := 1024
 	r.in = make(chan Payload, n)
@@ -422,6 +452,40 @@ func (r *Router) Run() {
 	r.bg.Run()
 }
 
+func (r *Router) requestOP(t int, obj ...interface{}) (interface{}, error) {
+	var v_ch interface{}
+	var v_obj interface{}
+	var v_n string
+
+	v_ch = r.opchs.Get()
+	if v_ch == nil {
+		return nil, ErrOPRouterStopped
+	}
+
+	for _, v := range obj {
+		switch t := v.(type) {
+		case *Listener:
+			v_obj = t
+		case *EndPoint:
+			v_obj = t
+		case string:
+			v_n = t
+		default:
+			panic("Router.requestOP recieve unexpected object")
+		}
+	}
+
+	ch := v_ch.(*Chan)
+	op := r.ops.Get().(*opReq)
+	op.t = t
+	op.v = v_obj
+	op.n = v_n
+	op.ret = ch
+	r.op <- op
+
+	return <-ch.ch, nil
+}
+
 func (r *Router) Stop() {
 	if !r.r {
 		return
@@ -429,22 +493,13 @@ func (r *Router) Stop() {
 	r.r = false
 
 	// S:Stop Listeners: No new connection can be accepted.
-	var op *opReq
-	op = r.ops.Get().(*opReq)
-	op.t = RouterOPStopAddListener
-	ch := op.ret
-	r.op <- op
-	if v := <-ch; v != nil {
+	if v, _ := r.requestOP(RouterOPStopAddListener); v != nil {
 		panic("stop add listener returns nil")
 	}
 
 stopListener:
 	for {
-		op = r.ops.Get().(*opReq)
-		op.t = RouterOPStopListener
-		ch := op.ret
-		r.op <- op
-		v := <-ch
+		v, _ := r.requestOP(RouterOPStopListener)
 		switch t := v.(type) {
 		case error:
 			if t == ErrOPListenerNotExist {
@@ -460,21 +515,13 @@ stopListener:
 	}
 
 	// S/C:Stop EndPoints: Server Shutdown/Client Shutdown.
-	op = r.ops.Get().(*opReq)
-	op.t = RouterOPStopAddEndPoint
-	ch = op.ret
-	r.op <- op
-	if v := <-ch; v != nil {
+	if v, _ := r.requestOP(RouterOPStopAddEndPoint); v != nil {
 		panic("stop add endpoint returns nil")
 	}
 
 stopEndPoint:
 	for {
-		op = r.ops.Get().(*opReq)
-		op.t = RouterOPStopEndPoint
-		ch = op.ret
-		r.op <- op
-		v := <-ch
+		v, _ := r.requestOP(RouterOPStopEndPoint)
 		switch t := v.(type) {
 		case error:
 			if t == ErrOPEndPointNotExist {
@@ -490,6 +537,7 @@ stopEndPoint:
 	}
 
 	// S/C:Stop Operations: No new EndPoint can be added.
+	r.opchs.Close()
 	r.ops.Close()
 
 	// C:TODO: in progress RPC?
@@ -557,19 +605,11 @@ func (r *Router) newHijackedEndPoint(name string, c net.Conn, mf MsgFactory, log
 }
 
 func (r *Router) AddEndPoint(ep *EndPoint) error {
-	var op *opReq
-	if v := r.ops.Get(); v == nil {
-		return ErrOPRouterStopped
-	} else {
-		op = v.(*opReq)
+	v, err := r.requestOP(RouterOPAddEndPoint, ep)
+	if err != nil {
+		return err
 	}
 
-	op.t = RouterOPAddEndPoint
-	op.v = ep
-	ch := op.ret
-
-	r.op <- op
-	v := <-ch
 	switch t := v.(type) {
 	case error:
 		return t
@@ -582,20 +622,10 @@ func (r *Router) AddEndPoint(ep *EndPoint) error {
 }
 
 func (r *Router) DelEndPoint(name string) error {
-	var op *opReq
-	if v := r.ops.Get(); v == nil {
-		return ErrOPRouterStopped
-	} else {
-		op = v.(*opReq)
+	v, err := r.requestOP(RouterOPDelEndPoint, name)
+	if err != nil {
+		return err
 	}
-
-	op.t = RouterOPDelEndPoint
-	op.n = name
-	ch := op.ret
-
-	r.op <- op
-
-	v := <-ch
 	switch t := v.(type) {
 	case error:
 		return t
@@ -630,21 +660,13 @@ func (r *Router) delEndPoint(name string) (*EndPoint, error) {
 
 // For server
 func (r *Router) AddListener(l *Listener) error {
-	var op *opReq
-	if v := r.ops.Get(); v == nil {
-		return ErrOPRouterStopped
-	} else {
-		op = v.(*opReq)
+	v, err := r.requestOP(RouterOPAddListener, l)
+	if err != nil {
+		return err
 	}
 
 	l.Run()
 
-	op.t = RouterOPAddListener
-	op.v = l
-	ch := op.ret
-
-	r.op <- op
-	v := <-ch
 	switch t := v.(type) {
 	case error:
 		return t
@@ -656,19 +678,10 @@ func (r *Router) AddListener(l *Listener) error {
 }
 
 func (r *Router) DelListener(name string) error {
-	var op *opReq
-	if v := r.ops.Get(); v == nil {
-		return ErrOPRouterStopped
-	} else {
-		op = v.(*opReq)
+	v, err := r.requestOP(RouterOPDelListener, name)
+	if err != nil {
+		return err
 	}
-
-	op.t = RouterOPDelListener
-	op.n = name
-	ch := op.ret
-
-	r.op <- op
-	v := <-ch
 	switch t := v.(type) {
 	case error:
 		return t
@@ -781,10 +794,10 @@ func (r *Router) LoopProcessOperation(op *opReq) {
 		}
 	}
 
-	op.ret <- ret
-	close(op.ret)
-	op.ret = make(chan interface{}, 1)
+	ch := op.ret
+	ch.ch <- ret
 	op.Reset().Recycle()
+	ch.Recycle()
 }
 
 func (r *Router) Loop(quit chan struct{}) {
