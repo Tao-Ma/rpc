@@ -482,8 +482,9 @@ func (r *Router) requestOP(t int, obj ...interface{}) (interface{}, error) {
 	op.n = v_n
 	op.ret = ch
 	r.op <- op
-
-	return <-ch.ch, nil
+	v := <-ch.ch
+	ch.Recycle()
+	return v, nil
 }
 
 func (r *Router) Stop() {
@@ -797,7 +798,6 @@ func (r *Router) LoopProcessOperation(op *opReq) {
 	ch := op.ret
 	ch.ch <- ret
 	op.Reset().Recycle()
-	ch.Recycle()
 }
 
 func (r *Router) Loop(quit chan struct{}) {
