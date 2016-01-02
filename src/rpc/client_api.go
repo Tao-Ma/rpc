@@ -85,3 +85,8 @@ func (r *Router) Call(ep string, rpc string, p Payload, cb RPCCallback_func, arg
 
 	r.call(ep, rpc, p, cb, arg, time.Now().Add(n))
 }
+
+func (rm *routeMsg) Return(r *Router, reply RouteRPCPayload) {
+	go rm.cb(reply.GetPayload(), rm.arg, nil)
+	rm.Recycle()
+}

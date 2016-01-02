@@ -2,7 +2,7 @@
 
 This is a simple rpc framework.
 
-Architect
+Architecture
 ___
 
 	Router
@@ -13,17 +13,18 @@ ___
 
 TODO
 ___
-- Support 'grpc' register server feature
-- Reuse EndPoint
-- Reuse Reader/Writer
-- Error
-- Log
-- Support Reader/Writer timeout(Defer/Deadline)
-- Ensure opReq.ret is resuable and concurrent safe
-- Test Call timeout
-- Route Rule
+- Compatibility: 'grpc' register server feature
+- Featue: Support Reader/Writer timeout(Defer/Deadline)
+- Featue: Error
+- Featue: Log
+- Featue: Route Rule
+- Test: Call timeout
+- Performance: Reuse EndPoint
+- Performance: Reuse Reader/Writer
+- Performance: Task Queue(May not useful, gc trace show there is no gc operation at all.)
 - Performance: Use lower level event module/shareReader/shareWriter
-- Security transport
-- Http Message
-- Http 2.0
-- grpc compatible
+- Security: transport
+- Protocol: Http Message
+- Protocol: Http 2.0
+- Compatibility: grpc api
+- Compatibility: grpc stream

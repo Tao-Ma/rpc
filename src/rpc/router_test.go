@@ -12,7 +12,7 @@ import (
 )
 
 var (
-	ConcurrentNum = 256
+	ConcurrentNum = 512
 )
 
 func ServiceProcessConn(r *Router, c net.Conn) bool {

@@ -27,13 +27,13 @@ blockpng="$tmp/block.png"
 
 echo "INFO: build test binary file: $bin"
 
-#GODEBUG=gctrace=1
-#GODEBUG=schedtrace=1000
+#export GODEBUG=gctrace=1
+#export GODEBUG=schedtrace=1000
 if [ "$profile" = "true" ]; then
 	profile_flags="-o $bin -cpuprofile $cpuprofile -memprofile $memprofile -blockprofile $blockprofile"
 fi
 
-go test "$pkgname" -bench=Router -benchtime 60s -cpu 32 $profile_flags
+go test "$pkgname" -bench=Router -timeout 10m -benchtime 20s -cpu 8 $profile_flags
 
 if [ "$profile" = "true" ]; then
 	echo "png > $cpupng"  | go tool pprof -ignore=testing "$bin" "$cpuprofile"

@@ -39,14 +39,10 @@ func (rm *routeMsg) Serve(r *Router, ep_name string, rpc string, id uint64, p Pa
 	out.cb = serve_done
 	out.r = r
 
+	// TODO: CAN NOT ACCESS OUT IN ROUTER GOROUTINE!
 	select {
 	case r.out <- out:
 	default:
 		panic("routeMsg leaks?!")
 	}
-}
-
-func (rm *routeMsg) Return(r *Router, reply RouteRPCPayload) {
-	go rm.cb(reply.GetPayload(), rm.arg, nil)
-	rm.Recycle()
 }

@@ -419,12 +419,12 @@ func NewRouter(logger *log.Logger, serve ServePayload) (*Router, error) {
 	r.lmap = make(map[string]*Listener)
 	r.nmap = make(map[string]*EndPoint)
 
-	op_num := 128
+	op_num := 16
 	r.op = make(chan *opReq, op_num)
 	r.ops = NewResourceManager(op_num, func() Resource { op := new(opReq); return op })
 	r.opchs = NewResourceManager(op_num, func() Resource { return NewChan() })
 
-	n := 1024
+	n := 128
 	r.in = make(chan Payload, n)
 	r.out = make(chan Payload, n*2)
 
