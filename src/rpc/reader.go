@@ -27,8 +27,11 @@ type Reader struct {
 
 	io IOChannel
 
-	maxlen uint32
-	b      []byte
+	maxlen         int
+	b              []byte
+	buffered       bool
+	b_alloc_offset int
+	b_data_offset  int
 
 	step int
 	p    Payload
@@ -51,9 +54,11 @@ func NewReader(conn io.ReadCloser, io IOChannel, mb MsgBuffer, logger *log.Logge
 	r.mb = mb
 	r.maxlen = 4096
 
+	r.buffered = false
+
 	r.io = io
 
-	r.b = make([]byte, r.maxlen+r.mb.GetHdrLen())
+	r.b = make([]byte, r.maxlen*2)
 
 	if logger == nil {
 		r.logger = log.New(os.Stderr, "", log.LstdFlags)
@@ -105,7 +110,63 @@ func (r *Reader) Loop(q chan struct{}) {
 }
 
 func (r *Reader) read(b []byte) (int, error) {
-	return r.conn.Read(b)
+	//	if r.use_lbuf {
+	// TODO
+	//	}
+
+	aoff := r.b_alloc_offset
+	doff := r.b_data_offset
+	if aoff <= doff {
+		return len(b), nil
+	}
+
+	// TODO: set deadline
+	needlen := r.maxlen
+	if !r.buffered {
+		needlen = aoff - doff
+	}
+
+	n, err := r.conn.Read(r.b[doff : doff+needlen])
+	if n < 0 {
+		return n, err
+	}
+
+	r.b_data_offset += n
+	doff += n
+
+	if aoff <= doff {
+		// ignore err if satisify request.
+		return len(b), nil
+	}
+
+	return n, err
+}
+
+func (r *Reader) allocBuf(rlen uint32) []byte {
+	len := int(rlen)
+	// TODO: if len is too large, need to use a special buf.
+	if len > r.maxlen {
+		// TODO: makesure r.lbuf large enough to hold all input data.
+		// TODO: copy the left data in normal buf.
+		// copy(dst, src)
+		// TODO: reset normal buf
+		// tell read() lbuf is use
+		// r.use_lbuf = true
+		// return r.lbuf[0:len]
+	}
+
+	aoff := r.b_alloc_offset
+	doff := r.b_data_offset
+	if aoff >= r.maxlen && (aoff+len > doff) {
+		// rewind
+		copy(r.b[0:doff-aoff], r.b[aoff:doff])
+		r.b_data_offset = doff - aoff
+		r.b_alloc_offset = 0
+		aoff = 0
+	}
+
+	r.b_alloc_offset += len
+	return r.b[aoff : aoff+len]
 }
 
 func (r *Reader) LoopOnce(q chan struct{}) (Payload, error) {
@@ -113,7 +174,7 @@ func (r *Reader) LoopOnce(q chan struct{}) (Payload, error) {
 		switch r.step {
 		case header_init:
 			r.mb.Reset()
-			r.hb = r.b[0:r.mb.GetHdrLen()]
+			r.hb = r.allocBuf(r.mb.GetHdrLen())
 			r.step = header_read
 		case header_read:
 			if _, err := r.read(r.hb); err != nil {
@@ -129,7 +190,7 @@ func (r *Reader) LoopOnce(q chan struct{}) (Payload, error) {
 		case body_init:
 			plen := r.mb.GetPayloadLen()
 			if plen > 0 {
-				r.pb = r.b[r.mb.GetHdrLen() : r.mb.GetHdrLen()+plen]
+				r.pb = r.allocBuf(plen)
 				r.step = body_read
 			} else {
 				// TODO: no payload ?
