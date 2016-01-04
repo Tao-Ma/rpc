@@ -88,7 +88,7 @@ func NewWriter(conn io.WriteCloser, io IOChannel, mb MsgBuffer, logger *log.Logg
 	w.ob = w.b
 	w.timeout = 10 * time.Microsecond
 
-	w.buffered = false
+	w.buffered = true
 
 	if logger == nil {
 		w.logger = log.New(os.Stderr, "", log.LstdFlags)
@@ -112,23 +112,26 @@ func (w *Writer) StopLoop(force bool) {
 	w.conn.Close()
 }
 
-func (w *Writer) write(force bool) error {
+func (w *Writer) ShouldFlush() bool {
 	aoff := w.b_alloc_offset
 	doff := w.b_data_offset
 	len := aoff - doff
 
-	if len >= w.maxlen || doff >= w.maxlen {
-		// rewind
-		force = true
-	}
+	return len >= w.maxlen || doff >= w.maxlen
+}
 
-	if &w.ob[0] != &w.b[0] {
-		force = true
-	}
+func (w *Writer) jitBuf() bool {
+	return &w.ob[0] != &w.b[0]
+}
 
-	if !force {
+func (w *Writer) write(force bool) error {
+	if !force && !w.ShouldFlush() && !w.jitBuf() {
 		return nil
 	}
+
+	aoff := w.b_alloc_offset
+	doff := w.b_data_offset
+	//w.logger.Printf("Writer(%v).write doff: %v aoff: %v len: %v", &w.bg, doff, aoff, aoff-doff)
 
 	n, err := w.conn.Write(w.b[doff:aoff])
 	if n < 0 {
@@ -147,9 +150,51 @@ func (w *Writer) write(force bool) error {
 func (w *Writer) LoopOnce(q chan struct{}) error {
 	var force bool
 
+	for {
+		select {
+		case <-q:
+			// TODO: flush
+			return errQuit
+		case <-w.tch:
+			// timeout
+			w.tch = nil
+			force = true
+		case p := <-w.io.Out():
+			if p == nil {
+				return errQuit
+			}
+			if err := w.Marshal(p); err != nil {
+				return err
+			}
+
+			// If there is no timer, add one.
+			if w.tch == nil {
+				w.tch = time.After(w.timeout)
+			}
+
+			if w.buffered && !w.ShouldFlush() {
+				continue
+			}
+		}
+
+		break
+	}
+
+	return w.write(force)
+}
+
+/*
+func (w *Writer) LoopOnce(q chan struct{}) error {
+	var force bool
+
 	select {
 	case <-q:
+		// TODO: flush
 		return errQuit
+	case <-w.tch:
+		// timeout
+		w.tch = nil
+		force = true
 	case p := <-w.io.Out():
 		if p == nil {
 			return errQuit
@@ -157,20 +202,18 @@ func (w *Writer) LoopOnce(q chan struct{}) error {
 		if err := w.Marshal(p); err != nil {
 			return err
 		}
-		if !w.buffered {
-			force = true
-			break
-		}
+
+		// If there is no timer, add one.
 		if w.tch == nil {
 			w.tch = time.After(w.timeout)
 		}
-	case <-w.tch:
-		force = true
-		w.tch = nil
+
+		force = !w.buffered || w.ShouldFlush()
 	}
 
 	return w.write(force)
 }
+*/
 
 func (w *Writer) Loop(q chan struct{}) {
 	for {
