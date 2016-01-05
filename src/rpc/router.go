@@ -800,6 +800,55 @@ func (r *Router) LoopProcessOperation(op *opReq) {
 	op.Reset().Recycle()
 }
 
+func (r *Router) ProcessOut(out RoutePayload) {
+	//r.logger.Printf("router: %v send: %T:%v", r, c.p, c.p)
+	if out.IsRPC() {
+		r.RpcOut(out.(RouteRPCPayload))
+	}
+
+	// TODO: apply route rule
+
+	if ep, exist := r.nmap[out.GetEPName()]; exist {
+		//r.logger.Printf("router: %v rpcout: %T:%v", r, c.p, c.p)
+		if err := ep.write(out); err != nil {
+			go out.Error(err)
+			// TODO: redesign the api
+			out.(*routeMsg).Recycle()
+		}
+	} else {
+		// race condition: Dial() is later than Call()
+		go out.Error(ErrOutErrorEndPointNotExist)
+		// TODO: redesign the api
+		out.(*routeMsg).Recycle()
+	}
+}
+
+func (r *Router) ProcessIn(in RoutePayload) {
+	//r.logger.Printf("router: %v recv: %T:%v", r, p, p)
+	rm := in.(*routeMsg)
+
+	// TODO: apply route rule
+
+	if in.IsRPC() {
+		if in.(RouteRPCPayload).IsRequest() {
+			// rpc request
+			// TODO: task queue
+			// TODO: server api
+			go in.(RouteRPCPayload).Serve(r, rm.ep_name, rm.rpc, rm.id, rm.p)
+		} else if out := r.RpcIn(in.(RouteRPCPayload)); out != nil {
+			// rpc reply
+			out.Return(r, in.(RouteRPCPayload))
+		} else {
+			// TODO: rpc timeout/cancel
+		}
+	} else {
+		// TODO: msg
+		go r.serve(r, in.GetEPName(), in.GetPayload())
+	}
+	// TODO: redesign the api
+	in.(*routeMsg).Recycle()
+}
+
 func (r *Router) Loop(quit chan struct{}) {
 forever:
 	for {
@@ -808,57 +857,12 @@ forever:
 			break forever
 		case op := <-r.op:
 			r.LoopProcessOperation(op)
-
 		case now := <-r.tt.Tick():
 			r.tt.TimeoutCheck(now)
 		case p := <-r.out:
-			//r.logger.Printf("router: %v send: %T:%v", r, c.p, c.p)
-			out := p.(RoutePayload)
-
-			if out.IsRPC() {
-				r.RpcOut(out.(RouteRPCPayload))
-			}
-
-			// TODO: apply route rule
-
-			if ep, exist := r.nmap[out.GetEPName()]; exist {
-				//r.logger.Printf("router: %v rpcout: %T:%v", r, c.p, c.p)
-				if err := ep.write(out); err != nil {
-					go out.Error(err)
-					// TODO: redesign the api
-					out.(*routeMsg).Recycle()
-				}
-			} else {
-				// race condition: Dial() is later than Call()
-				go out.Error(ErrOutErrorEndPointNotExist)
-				// TODO: redesign the api
-				out.(*routeMsg).Recycle()
-			}
+			r.ProcessOut(p.(RoutePayload))
 		case p := <-r.in:
-			//r.logger.Printf("router: %v recv: %T:%v", r, p, p)
-			in := p.(RoutePayload)
-			rm := in.(*routeMsg)
-
-			// TODO: apply route rule
-
-			if in.IsRPC() {
-				if in.(RouteRPCPayload).IsRequest() {
-					// rpc request
-					// TODO: task queue
-					// TODO: server api
-					go in.(RouteRPCPayload).Serve(r, rm.ep_name, rm.rpc, rm.id, rm.p)
-				} else if out := r.RpcIn(in.(RouteRPCPayload)); out != nil {
-					// rpc reply
-					out.Return(r, in.(RouteRPCPayload))
-				} else {
-					// TODO: rpc timeout/cancel
-				}
-			} else {
-				// TODO: msg
-				go r.serve(r, in.GetEPName(), in.GetPayload())
-			}
-			// TODO: redesign the api
-			in.(*routeMsg).Recycle()
+			r.ProcessIn(p.(RoutePayload))
 		}
 	}
 }

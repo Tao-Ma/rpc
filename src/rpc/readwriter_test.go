@@ -31,7 +31,7 @@ func (io chanPayload) OutError(err error) {
 
 func TestMockMsg(t *testing.T) {
 	pr, pw := io.Pipe()
-	ch := make(chanPayload)
+	ch := make(chanPayload, 128)
 
 	hf := NewMsgHeaderFactory(NewMsgProtobufFactory())
 
