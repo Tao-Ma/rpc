@@ -7,6 +7,7 @@ import (
 	"io"
 	"log"
 	"os"
+	"time"
 )
 
 var (
@@ -50,8 +51,14 @@ type Writer struct {
 	rm *ResourceManager
 
 	// buffer cache
-	maxlen uint32
-	b      []byte
+	maxlen         int
+	b              []byte
+	ob             []byte // always ref to w.b
+	b_alloc_offset int
+	b_data_offset  int
+	buffered       bool
+	tch            <-chan time.Time
+	timeout        time.Duration
 
 	// inprogress state
 	inprogress_p Payload
@@ -77,7 +84,11 @@ func NewWriter(conn io.WriteCloser, io IOChannel, mb MsgBuffer, logger *log.Logg
 	w.rm = NewResourceManager(128, func() Resource { return NewPayloadChan(io.Out()) })
 
 	w.maxlen = 4096
-	w.b = make([]byte, w.mb.GetHdrLen()+w.maxlen)
+	w.b = make([]byte, w.maxlen*2)
+	w.ob = w.b
+	w.timeout = 10 * time.Microsecond
+
+	w.buffered = false
 
 	if logger == nil {
 		w.logger = log.New(os.Stderr, "", log.LstdFlags)
@@ -101,39 +112,108 @@ func (w *Writer) StopLoop(force bool) {
 	w.conn.Close()
 }
 
-func (w *Writer) write(b []byte) (int, error) {
-	return w.conn.Write(b)
+func (w *Writer) ShouldFlush() bool {
+	aoff := w.b_alloc_offset
+	doff := w.b_data_offset
+	len := aoff - doff
+
+	return len >= w.maxlen || doff >= w.maxlen || !w.buffered
+}
+
+func (w *Writer) jitBuf() bool {
+	return &w.ob[0] != &w.b[0]
+}
+
+func (w *Writer) write(force bool) error {
+	if !force && !w.ShouldFlush() && !w.jitBuf() {
+		return nil
+	}
+
+	aoff := w.b_alloc_offset
+	doff := w.b_data_offset
+	//w.logger.Printf("Writer(%v).write doff: %v aoff: %v len: %v\n", &w.bg, doff, aoff, aoff-doff)
+
+	n, err := w.conn.Write(w.b[doff:aoff])
+	if n < 0 {
+		return err
+	}
+
+	w.b_data_offset += n
+	if n != aoff-doff {
+		// TODO: why?
+		return err
+	}
+
+	return nil
 }
 
 func (w *Writer) LoopOnce(q chan struct{}) error {
-	var err error
+	var force bool
 
-	if w.inprogress_b == nil {
+	for {
 		select {
 		case <-q:
+			// TODO: flush
 			return errQuit
-		case w.inprogress_p = <-w.io.Out():
+		case <-w.tch:
+			// timeout
+			w.tch = nil
+			force = true
+		case p := <-w.io.Out():
+			if p == nil {
+				return errQuit
+			}
+			if err := w.Marshal(p); err != nil {
+				return err
+			}
+
+			// If there is no timer, add one.
+			if w.buffered && w.tch == nil {
+				w.tch = time.After(w.timeout)
+			}
+
+			if !w.ShouldFlush() {
+				continue
+			}
 		}
+
+		break
 	}
 
-	if w.inprogress_p == nil {
-		// channel closed
-		return errQuit
-	} else if w.inprogress_b, err = w.Marshal(w.inprogress_p); err != nil {
-		// reset w.inprogress_p
-		w.inprogress_p = nil
-		w.inprogress_b = nil
-		return err
-	}
-
-	if _, err = w.write(w.inprogress_b); err != nil {
-		w.inprogress_b = nil
-		return err
-	}
-
-	w.inprogress_b = nil
-	return nil
+	return w.write(force)
 }
+
+/*
+func (w *Writer) LoopOnce(q chan struct{}) error {
+	var force bool
+
+	select {
+	case <-q:
+		// TODO: flush
+		return errQuit
+	case <-w.tch:
+		// timeout
+		w.tch = nil
+		force = true
+	case p := <-w.io.Out():
+		if p == nil {
+			return errQuit
+		}
+		if err := w.Marshal(p); err != nil {
+			return err
+		}
+
+		// If there is no timer, add one.
+		if w.tch == nil {
+			w.tch = time.After(w.timeout)
+		}
+
+		force = !w.buffered || w.ShouldFlush()
+	}
+
+	return w.write(force)
+}
+*/
 
 func (w *Writer) Loop(q chan struct{}) {
 	for {
@@ -162,23 +242,55 @@ func (w *Writer) Write(p Payload) error {
 	return nil
 }
 
-func (w *Writer) Marshal(p Payload) ([]byte, error) {
+func (w *Writer) allocBuf(rlen uint32) []byte {
+	len := int(rlen)
+
+	aoff := w.b_alloc_offset
+	doff := w.b_data_offset
+	if doff >= w.maxlen {
+		// rewind first
+		copy(w.b[0:aoff-doff], w.b[doff:aoff])
+		w.b_alloc_offset = aoff - doff
+		w.b_data_offset = 0
+		aoff = aoff - doff
+	}
+
+	if len == 0 {
+		// don't change aoff
+		return w.b[aoff:]
+	}
+
+	w.b_alloc_offset += len
+	return w.b[aoff : aoff+len]
+}
+
+func (w *Writer) Marshal(p Payload) error {
 	w.mb.Reset()
 
 	w.mb.SetPayloadInfo(p)
 	p = w.io.Unwrap(p)
 
-	pb, err := w.mb.MarshalPayload(p, w.b[w.mb.GetHdrLen():w.mb.GetHdrLen()])
+	hb := w.allocBuf(w.mb.GetHdrLen())
+	pb := w.allocBuf(0)
+
+	npb, err := w.mb.MarshalPayload(p, pb)
 	if err != nil {
-		return nil, err
+		return err
 	}
 
-	hb := w.b[0:w.mb.GetHdrLen()]
-	if err := w.mb.MarshalHeader(hb, p, uint32(len(pb))); err != nil {
-		return nil, err
+	if err := w.mb.MarshalHeader(hb, p, uint32(len(npb))); err != nil {
+		return err
 	}
 
-	b := append(hb, pb...)
+	if &npb[0] == &pb[0] {
+		// unchanged
+		w.allocBuf(uint32(len(npb)))
+		return nil
+	}
 
-	return b, nil
+	// changed
+	w.b = append(w.b[w.b_data_offset:w.b_alloc_offset], npb...)
+	w.b_data_offset = 0
+	w.b_alloc_offset = len(w.b)
+	return nil
 }
