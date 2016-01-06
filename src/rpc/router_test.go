@@ -7,6 +7,7 @@ import (
 	"github.com/golang/protobuf/proto"
 	"math/rand"
 	"net"
+	"sync"
 	"testing"
 	"time"
 )
@@ -43,7 +44,11 @@ func ClientProcessReponse(p Payload, arg RPCCallback_arg, err error) {
 	done <- true
 }
 
-func ClientProcessReponseIgnore(p Payload, arg RPCCallback_arg, err error) {
+func ClientProcessReponseWaitGroup(p Payload, arg RPCCallback_arg, err error) {
+	arg.(*sync.WaitGroup).Done()
+	if err != nil {
+		panic("Error")
+	}
 }
 
 func TestRouterSingle(t *testing.T) {
@@ -347,15 +352,23 @@ func testSeperateRouter(b *testing.B, server_r *Router, client_r *Router, n int,
 	b.ResetTimer()
 	b.RunParallel(func(pb *testing.PB) {
 		for pb.Next() {
+			var wg sync.WaitGroup
 			for i := 0; i < m; i++ {
 				req := NewResourceReq()
-				req.Id = proto.Uint64(1)
+				req.Id = proto.Uint64(0)
 				i := rand.Intn(n)
-				//r.Call("scheduler", req, ClientProcessReponseIgnore, nil, 0)
-				if _, err := client_r.CallWait(name+string(i), "rpc", req, 5); err != nil {
-					b.Log(err)
-					b.FailNow()
+				if m == 1 {
+					if _, err := client_r.CallWait(name+string(i), "rpc", req, 5); err != nil {
+						b.Log(err)
+						b.FailNow()
+					}
+				} else {
+					wg.Add(1)
+					client_r.Call(name+string(i), "rpc", req, ClientProcessReponseWaitGroup, &wg, 0)
 				}
+			}
+			if m > 1 {
+				wg.Wait()
 			}
 		}
 	})

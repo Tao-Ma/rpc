@@ -52,7 +52,7 @@ func NewReader(conn io.ReadCloser, io IOChannel, mb MsgBuffer, logger *log.Logge
 
 	r.conn = conn
 	r.mb = mb
-	r.maxlen = 4096
+	r.maxlen = 4 * 1024
 
 	r.buffered = false
 

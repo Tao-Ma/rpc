@@ -83,7 +83,7 @@ func NewWriter(conn io.WriteCloser, io IOChannel, mb MsgBuffer, logger *log.Logg
 
 	w.rm = NewResourceManager(128, func() Resource { return NewPayloadChan(io.Out()) })
 
-	w.maxlen = 4096
+	w.maxlen = 4 * 1024
 	w.b = make([]byte, w.maxlen*2)
 	w.ob = w.b
 	w.timeout = 10 * time.Microsecond
