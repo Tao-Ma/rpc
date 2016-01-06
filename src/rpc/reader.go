@@ -18,6 +18,11 @@ const (
 	body_unmarshal
 )
 
+type stats struct {
+	Times uint64
+	Bytes uint64
+}
+
 type Reader struct {
 	bg *BackgroudService
 
@@ -38,6 +43,7 @@ type Reader struct {
 	hb   []byte
 	pb   []byte
 
+	stats  stats
 	logger *log.Logger
 }
 
@@ -82,6 +88,7 @@ func (r *Reader) Run() {
 
 func (r *Reader) Stop() {
 	r.bg.Stop()
+	//r.logger.Printf("read bytes: %v read times: %v\n", r.stats.Bytes, r.stats.Times)
 }
 
 func (r *Reader) StopLoop(force bool) {
@@ -130,6 +137,8 @@ func (r *Reader) read(b []byte) (int, error) {
 	if n < 0 {
 		return n, err
 	}
+	r.stats.Bytes += uint64(n)
+	r.stats.Times += 1
 
 	r.b_data_offset += n
 	doff += n

@@ -64,6 +64,7 @@ type Writer struct {
 	inprogress_p Payload
 	inprogress_b []byte
 
+	stats  stats
 	logger *log.Logger
 }
 
@@ -105,6 +106,7 @@ func (w *Writer) Run() {
 
 func (w *Writer) Stop() {
 	w.bg.Stop()
+	//w.logger.Printf("write bytes: %v write times: %v\n", w.stats.Bytes, w.stats.Times)
 }
 
 func (w *Writer) StopLoop(force bool) {
@@ -137,6 +139,8 @@ func (w *Writer) write(force bool) error {
 	if n < 0 {
 		return err
 	}
+	w.stats.Bytes += uint64(n)
+	w.stats.Times += 1
 
 	w.b_data_offset += n
 	if n != aoff-doff {
@@ -200,11 +204,7 @@ func (w *Writer) Write(p Payload) error {
 		return ErrWriterClosed
 	}
 
-	select {
-	case ch.ch <- p:
-	default:
-		panic("channel ref leaks?!")
-	}
+	ch.ch <- p
 
 	ch.Recycle()
 

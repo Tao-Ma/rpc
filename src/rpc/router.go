@@ -293,6 +293,7 @@ func (rm *routeMsg) When() time.Time {
 }
 
 func (rm *routeMsg) Timeout(now time.Time) {
+	rm.r.stats.rpcTimeout++
 	go rm.cb(nil, rm.arg, ErrCallTimeout)
 	r := rm.r
 	if out, exist := r.calls[rm.GetRPCID()]; exist {
@@ -368,6 +369,16 @@ func (op *opReq) Reset() *opReq {
 	return op
 }
 
+type routerStats struct {
+	epIn  uint64
+	epOut uint64
+
+	rpcIn      uint64
+	rpcOut     uint64
+	rpcTimeout uint64
+	rpcError   uint64
+}
+
 type Router struct {
 	bg *BackgroudService
 	r  bool
@@ -402,6 +413,8 @@ type Router struct {
 
 	timeout time.Duration
 
+	stats routerStats
+
 	logger *log.Logger
 }
 
@@ -424,7 +437,7 @@ func NewRouter(logger *log.Logger, serve ServePayload) (*Router, error) {
 	r.ops = NewResourceManager(op_num, func() Resource { op := new(opReq); return op })
 	r.opchs = NewResourceManager(op_num, func() Resource { return NewChan() })
 
-	n := 128
+	n := 1 * 128
 	r.in = make(chan Payload, n)
 	r.out = make(chan Payload, n*2)
 
@@ -558,6 +571,9 @@ stopEndPoint:
 	close(r.op)
 	close(r.in)
 	close(r.out)
+
+	//	r.logger.Printf("rpc in: %v rpc out: %v rpc err: %v rpc timeout: %v\n",
+	//		r.stats.rpcIn, r.stats.rpcOut, r.stats.rpcError, r.stats.rpcTimeout)
 }
 
 func (r *Router) call(ep string, rpc string, p Payload, cb RPCCallback_func, arg RPCCallback_arg, to time.Time) {
@@ -598,7 +614,7 @@ func (r *Router) Write(ep string, p Payload) {
 }
 
 func (r *Router) newRouterEndPoint(name string, c net.Conn, mf MsgFactory) *EndPoint {
-	return NewEndPoint(name, c, make(chan Payload, 1024), r.in, mf, r, r.logger)
+	return NewEndPoint(name, c, make(chan Payload, 8*128), r.in, mf, r, r.logger)
 }
 
 func (r *Router) newHijackedEndPoint(name string, c net.Conn, mf MsgFactory, logger *log.Logger) *EndPoint {
@@ -811,12 +827,14 @@ func (r *Router) ProcessOut(out RoutePayload) {
 	if ep, exist := r.nmap[out.GetEPName()]; exist {
 		//r.logger.Printf("router: %v rpcout: %T:%v", r, c.p, c.p)
 		if err := ep.write(out); err != nil {
+			r.stats.rpcError++
 			go out.Error(err)
 			// TODO: redesign the api
 			out.(*routeMsg).Recycle()
 		}
 	} else {
 		// race condition: Dial() is later than Call()
+		r.stats.rpcError++
 		go out.Error(ErrOutErrorEndPointNotExist)
 		// TODO: redesign the api
 		out.(*routeMsg).Recycle()
@@ -872,6 +890,7 @@ func (r *Router) RpcOut(out RouteRPCPayload) {
 		return
 	}
 
+	r.stats.rpcOut++
 	out.SetRPCID(r.next)
 	r.next++
 	if _, exist := r.calls[out.GetRPCID()]; exist {
@@ -888,6 +907,7 @@ func (r *Router) RpcIn(in RouteRPCPayload) RouteRPCPayload {
 		return nil
 	}
 
+	r.stats.rpcIn++
 	id := in.GetRPCID()
 	if out, exist := r.calls[id]; !exist {
 		// timeout or cancel, the callback should be called.
