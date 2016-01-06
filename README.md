@@ -14,10 +14,12 @@ ___
 TODO
 ___
 - Compatibility: 'grpc' register server feature
-- Featue: Support Reader/Writer timeout(Defer/Deadline)
-- Featue: Error
-- Featue: Log
-- Featue: Route Rule
+- Feature: writer timeout using time.Tick instead of using time.After
+- Feature: Support Reader/Writer timeout(Defer/Deadline)
+- Feature: Support Large Message.
+- Feature: Error
+- Feature: Log
+- Feature: Route Rule
 - Test: Call timeout
 - Performance: Reuse EndPoint
 - Performance: Reuse Reader/Writer

@@ -177,43 +177,12 @@ func (w *Writer) LoopOnce(q chan struct{}) error {
 			}
 		}
 
+		w.tch = nil
 		break
 	}
 
 	return w.write(force)
 }
-
-/*
-func (w *Writer) LoopOnce(q chan struct{}) error {
-	var force bool
-
-	select {
-	case <-q:
-		// TODO: flush
-		return errQuit
-	case <-w.tch:
-		// timeout
-		w.tch = nil
-		force = true
-	case p := <-w.io.Out():
-		if p == nil {
-			return errQuit
-		}
-		if err := w.Marshal(p); err != nil {
-			return err
-		}
-
-		// If there is no timer, add one.
-		if w.tch == nil {
-			w.tch = time.After(w.timeout)
-		}
-
-		force = !w.buffered || w.ShouldFlush()
-	}
-
-	return w.write(force)
-}
-*/
 
 func (w *Writer) Loop(q chan struct{}) {
 	for {
