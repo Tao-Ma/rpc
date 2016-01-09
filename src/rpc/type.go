@@ -13,6 +13,7 @@ var (
 	// server_api
 )
 
+// TODO: dup Payload to reduce the complex of import
 type Payload interface {
 }
 

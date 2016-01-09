@@ -2,8 +2,7 @@
 
 default_go_workspace=`pwd`
 
-go_lib_deps='github.com/miekg/dns
-github.com/golang/protobuf/proto
+go_lib_deps='github.com/golang/protobuf/proto
 github.com/golang/protobuf/protoc-gen-go'
 
 bin_deps='protoc

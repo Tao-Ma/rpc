@@ -18,7 +18,7 @@ const (
 	body_unmarshal
 )
 
-type stats struct {
+type iostats struct {
 	Times uint64
 	Bytes uint64
 }
@@ -43,7 +43,7 @@ type Reader struct {
 	hb   []byte
 	pb   []byte
 
-	stats  stats
+	stats  iostats
 	logger *log.Logger
 }
 

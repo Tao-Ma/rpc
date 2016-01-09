@@ -5,9 +5,8 @@ tmp='./tmp'
 . ./setup.sh
 
 # build msg
-cd src/rpc
-./msg_gen.sh
-cd -
+dir=src/rpc/pb_test
+src/rpc/msg_gen.sh --input $dir/msg.proto --output $dir/msg_pbpayload.go --pkgname pb_test
 
 if [ ! -e "$tmp" ]; then
 	mkdir "$tmp" || (echo "ERROR: cannot create tmp direcotry" >&2 && exit 1)
@@ -29,6 +28,7 @@ echo "INFO: build test binary file: $bin"
 
 #export GODEBUG=gctrace=1
 #export GODEBUG=schedtrace=1000
+
 if [ "$profile" = "true" ]; then
 	profile_flags="-o $bin -cpuprofile $cpuprofile -memprofile $memprofile -blockprofile $blockprofile"
 fi

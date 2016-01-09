@@ -1,4 +1,4 @@
-package rpc;
+package pb_test;
 
 message ResourceReq {
 	required uint64 id = 1;

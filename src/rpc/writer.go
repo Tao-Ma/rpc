@@ -59,12 +59,13 @@ type Writer struct {
 	buffered       bool
 	tch            <-chan time.Time
 	timeout        time.Duration
+	tick           <-chan time.Time
 
 	// inprogress state
 	inprogress_p Payload
 	inprogress_b []byte
 
-	stats  stats
+	stats  iostats
 	logger *log.Logger
 }
 
@@ -88,6 +89,7 @@ func NewWriter(conn io.WriteCloser, io IOChannel, mb MsgBuffer, logger *log.Logg
 	w.b = make([]byte, w.maxlen*2)
 	w.ob = w.b
 	w.timeout = 10 * time.Microsecond
+	w.tick = time.Tick(w.timeout)
 
 	w.buffered = false
 
@@ -173,7 +175,16 @@ func (w *Writer) LoopOnce(q chan struct{}) error {
 
 			// If there is no timer, add one.
 			if w.buffered && w.tch == nil {
-				w.tch = time.After(w.timeout)
+				//w.tch = time.After(w.timeout)
+				w.tch = w.tick
+			now:
+				for {
+					select {
+					case <-w.tch:
+					default:
+						break now
+					}
+				}
 			}
 
 			if !w.ShouldFlush() {

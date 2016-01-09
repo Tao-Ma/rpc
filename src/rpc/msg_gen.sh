@@ -2,13 +2,39 @@
 # Copyright (C) Tao Ma(tao.ma.1984@gmail.com), All rights reserved.
 # https://github.com/Tao-Ma/rpc/
 
-pkgname=rpc
-outfile=msg_pbpayload.go
-outpath=.
-protofile=msg.proto
+pkgname=
+outfile=
+protofile=
+
+while [ $# -gt 0 ]; do
+	case $1 in
+		--input|-i)
+			shift
+			protofile=$1
+			;;
+		--output|-o)
+			shift
+			outfile=$1
+			;;
+		--pkgname|-n)
+			shift
+			pkgname=$1
+			;;
+		*)
+			echo "invalid argument: \"$1\"" >&2
+			exit 1
+			;;
+	esac
+	shift
+done
+
+if [ -z "$pkgname" ]; then
+	echo "invalid package name: \"$pkgname\"" >&2
+	exit 1
+fi
 
 echo "generate new protobuf file..."
-protoc --go_out="$outpath" "$protofile"  || exit $?
+protoc --go_out="." "$protofile"  || exit $?
 
 names=`grep message "$protofile" | awk '{print $2}' | grep -E -v '^[[:blank:]]*$'`
 
@@ -19,6 +45,7 @@ cat >"$outfile" <<EOF
 package $pkgname
 
 import (
+	mi "rpc/msg_interface"
 	"github.com/golang/protobuf/proto"
 )
 
@@ -29,7 +56,7 @@ EOF
 # Output the msg id
 for n in $names
 do
-	echo "\t${n}ID" >> "$outfile"
+	echo "	${n}ID" >> "$outfile"
 done
 
 cat >>"$outfile" <<EOF
@@ -37,22 +64,22 @@ cat >>"$outfile" <<EOF
 
 type msgProtobufFactory struct{}
 
-func NewMsgProtobufFactory() MsgPayloadFactory {
+func NewMsgProtobufFactory() mi.MsgPayloadFactory {
 	pf := new(msgProtobufFactory)
-	return MsgPayloadFactory(pf)
+	return mi.MsgPayloadFactory(pf)
 }
 
 type msgProtobufBuffer struct {
 	buf proto.Buffer
 }
 
-func (pf *msgProtobufFactory) NewBuffer() MsgPayloadBuffer{
+func (pf *msgProtobufFactory) NewBuffer() mi.MsgPayloadBuffer{
 	pb := new(msgProtobufBuffer)
 
-	return MsgPayloadBuffer(pb)
+	return mi.MsgPayloadBuffer(pb)
 }
 
-func (pb *msgProtobufBuffer) Marshal(p MsgPayload, b []byte) ([]byte, error) {
+func (pb *msgProtobufBuffer) Marshal(p mi.MsgPayload, b []byte) ([]byte, error) {
 	// Refer: github.com/golang/protobuf/proto/encode.go
 	// func Marshal(pb Message) ([]byte, error)
 	m, ok := p.(proto.Message)
@@ -71,7 +98,7 @@ func (pb *msgProtobufBuffer) Marshal(p MsgPayload, b []byte) ([]byte, error) {
 	return pb.buf.Bytes(), nil
 }
 
-func (pb *msgProtobufBuffer) Unmarshal(id uint16, b []byte) (MsgPayload, error) {
+func (pb *msgProtobufBuffer) Unmarshal(id uint16, b []byte) (mi.MsgPayload, error) {
 	p := pb.New(id)
 	m, ok := p.(proto.Message)
 	if !ok {
@@ -87,7 +114,7 @@ func (pb *msgProtobufBuffer) Unmarshal(id uint16, b []byte) (MsgPayload, error) 
 	}
 }
 
-func (pb *msgProtobufBuffer) New(id uint16) (p MsgPayload) {
+func (pb *msgProtobufBuffer) New(id uint16) (p mi.MsgPayload) {
 	switch id {
 EOF
 

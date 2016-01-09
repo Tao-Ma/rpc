@@ -3,21 +3,9 @@
 
 package rpc
 
-import ()
-
-type MsgPayload interface {
-	Payload
-	GetMsgPayloadID() uint16
-}
-
-type MsgPayloadBuffer interface {
-	Marshal(MsgPayload, []byte) ([]byte, error)
-	Unmarshal(uint16, []byte) (MsgPayload, error)
-}
-
-type MsgPayloadFactory interface {
-	NewBuffer() MsgPayloadBuffer
-}
+import (
+	mi "rpc/msg_interface"
+)
 
 const (
 	MSG_RPC = 1 << iota
@@ -35,10 +23,10 @@ type msgHeader struct {
 }
 
 type MsgHeaderFactory struct {
-	pf MsgPayloadFactory
+	pf mi.MsgPayloadFactory
 }
 
-func NewMsgHeaderFactory(pf MsgPayloadFactory) MsgFactory {
+func NewMsgHeaderFactory(pf mi.MsgPayloadFactory) MsgFactory {
 	hf := new(MsgHeaderFactory)
 	hf.pf = pf
 	return MsgFactory(hf)
@@ -58,7 +46,7 @@ func (hf *MsgHeaderFactory) NewBuffer() MsgBuffer {
 type msgHeaderBuffer struct {
 	h      msgHeader
 	hdrlen uint32
-	b      MsgPayloadBuffer
+	b      mi.MsgPayloadBuffer
 }
 
 func (hb *msgHeaderBuffer) GetHdrLen() uint32 {
@@ -70,7 +58,7 @@ func (hb *msgHeaderBuffer) GetPayloadLen() uint32 {
 }
 
 func (hb *msgHeaderBuffer) MarshalPayload(p Payload, b []byte) ([]byte, error) {
-	mp, ok := p.(MsgPayload)
+	mp, ok := p.(mi.MsgPayload)
 	if !ok {
 		return b, nil
 	}
@@ -116,7 +104,7 @@ func (hb *msgHeaderBuffer) MarshalHeader(b []byte, p Payload, l uint32) error {
 	if uint32(len(b)) < hb.hdrlen {
 		return nil
 	}
-	mp, ok := p.(MsgPayload)
+	mp, ok := p.(mi.MsgPayload)
 	if !ok {
 		return nil
 	}

@@ -6,6 +6,7 @@ package rpc
 import (
 	"github.com/golang/protobuf/proto"
 	"io"
+	pbt "rpc/pb_test"
 	"testing"
 	"time"
 )
@@ -33,7 +34,7 @@ func TestMockMsg(t *testing.T) {
 	pr, pw := io.Pipe()
 	ch := make(chanPayload, 128)
 
-	hf := NewMsgHeaderFactory(NewMsgProtobufFactory())
+	hf := NewMsgHeaderFactory(pbt.NewMsgProtobufFactory())
 
 	w := NewWriter(pw, ch, hf.NewBuffer(), nil)
 	r := NewReader(pr, ch, hf.NewBuffer(), nil)
@@ -41,14 +42,14 @@ func TestMockMsg(t *testing.T) {
 	w.Run()
 	r.Run()
 
-	req := NewResourceReq()
+	req := pbt.NewResourceReq()
 	req.Id = proto.Uint64(10000)
 	w.Write(req)
 	<-time.After(1 * time.Second)
 
 	select {
 	case resp := <-ch:
-		if resp.(*ResourceReq).GetId() != 10000 {
+		if resp.(*pbt.ResourceReq).GetId() != 10000 {
 			t.Log(req, resp)
 			t.Fail()
 		}
