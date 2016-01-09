@@ -10,6 +10,12 @@ import (
 	"time"
 )
 
+func ClientProcessReponseWaitGroup(p rpc.Payload, arg rpc.RPCCallback_arg, err error) {
+	arg.(*sync.WaitGroup).Done()
+	if err != nil {
+		panic("Error")
+	}
+}
 func main() {
 	address := flag.String("address", ":10000", "benchmark server address")
 	conn_num := flag.Uint64("conn_num", 1, "benchmark connection number")
@@ -52,11 +58,7 @@ func main() {
 					req := testpb.NewTestReq()
 					req.Id = proto.Uint64(1)
 
-					if _, err := r.CallWait("benchmark", "rpc", req, 5); err != nil {
-						panic(err)
-					} else {
-					}
-					burst_wg.Done()
+					r.Call("benchmark", "rpc", req, ClientProcessReponseWaitGroup, &burst_wg, 0)
 				}
 				burst_wg.Wait()
 			}
