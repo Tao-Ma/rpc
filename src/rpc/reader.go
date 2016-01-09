@@ -166,7 +166,7 @@ func (r *Reader) allocBuf(rlen uint32) []byte {
 
 	aoff := r.b_alloc_offset
 	doff := r.b_data_offset
-	if aoff >= r.maxlen && (aoff+len > doff) {
+	if doff >= r.maxlen && (aoff+len > doff) {
 		// rewind
 		copy(r.b[0:doff-aoff], r.b[aoff:doff])
 		r.b_data_offset = doff - aoff
