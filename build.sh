@@ -26,6 +26,12 @@ blockpng="$tmp/block.png"
 
 echo "INFO: build test binary file: $bin"
 
+
+dir=src/benchmark/proto_pb_test
+src/rpc/msg_gen.sh --input $dir/msg.proto --output $dir/msg_pbpayload.go --pkgname "proto_pb_test"
+go install benchmark/client/...
+go install benchmark/...
+
 #export GODEBUG=gctrace=1
 #export GODEBUG=schedtrace=1000
 

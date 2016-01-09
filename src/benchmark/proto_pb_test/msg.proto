@@ -1,0 +1,9 @@
+package proto_pb_test;
+
+message TestReq {
+	required uint64 id = 1;
+}
+
+message TestRep {
+	required uint64 id = 1;
+}
