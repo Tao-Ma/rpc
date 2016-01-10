@@ -110,6 +110,23 @@ func (ep *EndPoint) Stop() {
 	ep.conn.Close()
 	ep.r.Stop()
 	ep.w.Stop()
+	ep.Cleanup()
+}
+
+func (ep *EndPoint) Cleanup() {
+	// TODO: use Router.CleanupEndPoint
+cleanup:
+	for {
+		select {
+		case p := <-ep.out:
+			// TODO: generalize interface
+			p.(*routeMsg).Recycle()
+		default:
+			break cleanup
+		}
+	}
+
+	close(ep.out)
 }
 
 func (ep *EndPoint) In() chan Payload {
@@ -498,6 +515,10 @@ func (r *Router) requestOP(t int, obj ...interface{}) (interface{}, error) {
 	v := <-ch.ch
 	ch.Recycle()
 	return v, nil
+}
+
+func (r *Router) Cleanup() {
+	// nothing to do
 }
 
 func (r *Router) Stop() {

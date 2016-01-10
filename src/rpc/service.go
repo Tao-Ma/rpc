@@ -13,6 +13,6 @@ var (
 type Service interface {
 	// LoopOnce returns should continue.
 	Loop(quit chan struct{})
-
 	StopLoop(force bool)
+	Cleanup()
 }

@@ -58,6 +58,6 @@ func (bg *BackgroudService) Stop() {
 
 	select {
 	case <-bg.ready:
-		//bg.s.Cleanup()
+		bg.s.Cleanup()
 	}
 }

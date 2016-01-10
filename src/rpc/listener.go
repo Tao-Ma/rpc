@@ -61,6 +61,10 @@ func (l *Listener) Loop(q chan struct{}) {
 	// TODO: wait ?
 }
 
+func (l *Listener) Cleanup() {
+	// nothing to do
+}
+
 func (l *Listener) accepter() {
 	for {
 		if c, err := l.l.Accept(); err != nil {

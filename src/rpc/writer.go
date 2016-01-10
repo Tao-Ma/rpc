@@ -210,6 +210,10 @@ func (w *Writer) Loop(q chan struct{}) {
 	}
 }
 
+func (w *Writer) Cleanup() {
+	w.rm.Close()
+}
+
 func (w *Writer) Write(p Payload) error {
 	ch := w.rm.Get().(*PayloadChan)
 	if ch == nil {

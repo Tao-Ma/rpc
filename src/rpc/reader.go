@@ -91,6 +91,10 @@ func (r *Reader) Stop() {
 	//r.logger.Printf("read bytes: %v read times: %v\n", r.stats.Bytes, r.stats.Times)
 }
 
+func (r *Reader) Cleanup() {
+	// nothing to do
+}
+
 func (r *Reader) StopLoop(force bool) {
 	// TODO: Add a handler to do something before conn.Close().
 	r.conn.Close()
