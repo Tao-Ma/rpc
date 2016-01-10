@@ -4,6 +4,7 @@
 package rpc
 
 import (
+	"fmt"
 	"log"
 	"net"
 	"os"
@@ -390,10 +391,24 @@ type routerStats struct {
 	epIn  uint64
 	epOut uint64
 
+	msgIn    uint64
+	msgOut   uint64
+	msgError uint64
+
 	rpcIn      uint64
 	rpcOut     uint64
 	rpcTimeout uint64
-	rpcError   uint64
+}
+
+func (rs *routerStats) String() string {
+	return fmt.Sprintf("EndPoint Create: %v ", rs.epIn) +
+		fmt.Sprintf("EndPoint Delete: %v ", rs.epOut) +
+		fmt.Sprintf("Message Recv: %v ", rs.msgIn) +
+		fmt.Sprintf("(RPC Recv: %v) ", rs.rpcIn) +
+		fmt.Sprintf("Message Send: %v ", rs.msgOut) +
+		fmt.Sprintf("(RPC Send: %v) ", rs.rpcOut) +
+		fmt.Sprintf("RPC Timeout: %v ", rs.rpcTimeout) +
+		fmt.Sprintf("Error: %v\n", rs.msgError)
 }
 
 type Router struct {
@@ -593,8 +608,7 @@ stopEndPoint:
 	close(r.in)
 	close(r.out)
 
-	//	r.logger.Printf("rpc in: %v rpc out: %v rpc err: %v rpc timeout: %v\n",
-	//		r.stats.rpcIn, r.stats.rpcOut, r.stats.rpcError, r.stats.rpcTimeout)
+	r.logger.Printf("%v\n", &r.stats)
 }
 
 func (r *Router) call(ep string, rpc string, p Payload, cb RPCCallback_func, arg RPCCallback_arg, to time.Time) {
@@ -839,6 +853,9 @@ func (r *Router) LoopProcessOperation(op *opReq) {
 
 func (r *Router) ProcessOut(out RoutePayload) {
 	//r.logger.Printf("router: %v send: %T:%v", r, c.p, c.p)
+
+	r.stats.msgOut++
+
 	if out.IsRPC() {
 		r.RpcOut(out.(RouteRPCPayload))
 	}
@@ -848,14 +865,14 @@ func (r *Router) ProcessOut(out RoutePayload) {
 	if ep, exist := r.nmap[out.GetEPName()]; exist {
 		//r.logger.Printf("router: %v rpcout: %T:%v", r, c.p, c.p)
 		if err := ep.write(out); err != nil {
-			r.stats.rpcError++
+			r.stats.msgError++
 			go out.Error(err)
 			// TODO: redesign the api
 			out.(*routeMsg).Recycle()
 		}
 	} else {
 		// race condition: Dial() is later than Call()
-		r.stats.rpcError++
+		r.stats.msgError++
 		go out.Error(ErrOutErrorEndPointNotExist)
 		// TODO: redesign the api
 		out.(*routeMsg).Recycle()
@@ -865,6 +882,8 @@ func (r *Router) ProcessOut(out RoutePayload) {
 func (r *Router) ProcessIn(in RoutePayload) {
 	//r.logger.Printf("router: %v recv: %T:%v", r, p, p)
 	rm := in.(*routeMsg)
+
+	r.stats.msgIn++
 
 	// TODO: apply route rule
 
