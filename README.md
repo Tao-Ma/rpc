@@ -14,6 +14,8 @@ ___
 TODO
 ___
 - Compatibility: 'grpc' register server feature
+- BUG: It looks like huge concurrent requests with small buffered reader/writer will cause crash.
+- Feature: EndPoint Notify(client close Router and report error.)
 - Feature: writer timeout using time.Tick instead of using time.After
 - Feature: Support Reader/Writer timeout(Defer/Deadline)
 - Feature: Support Large Message.
