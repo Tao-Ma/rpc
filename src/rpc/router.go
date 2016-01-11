@@ -469,7 +469,7 @@ func NewRouter(logger *log.Logger, serve ServePayload) (*Router, error) {
 	r.ops = NewResourceManager(op_num, func() Resource { op := new(opReq); return op })
 	r.opchs = NewResourceManager(op_num, func() Resource { return NewChan() })
 
-	n := 1 * 128
+	n := 16 * 128
 	r.in = make(chan Payload, n)
 	r.out = make(chan Payload, n*2)
 
@@ -649,7 +649,7 @@ func (r *Router) Write(ep string, p Payload) {
 }
 
 func (r *Router) newRouterEndPoint(name string, c net.Conn, mf MsgFactory) *EndPoint {
-	return NewEndPoint(name, c, make(chan Payload, 8*128), r.in, mf, r, r.logger)
+	return NewEndPoint(name, c, make(chan Payload, 16*128), r.in, mf, r, r.logger)
 }
 
 func (r *Router) newHijackedEndPoint(name string, c net.Conn, mf MsgFactory, logger *log.Logger) *EndPoint {

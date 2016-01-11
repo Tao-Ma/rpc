@@ -85,13 +85,13 @@ func NewWriter(conn io.WriteCloser, io IOChannel, mb MsgBuffer, logger *log.Logg
 
 	w.rm = NewResourceManager(128, func() Resource { return NewPayloadChan(io.Out()) })
 
-	w.maxlen = 4 * 1024
+	w.maxlen = 128 * 1024
 	w.b = make([]byte, w.maxlen*2)
 	w.ob = w.b
 	w.timeout = 10 * time.Microsecond
 	w.ticker = time.NewTicker(w.timeout)
 
-	w.buffered = false
+	w.buffered = true
 
 	if logger == nil {
 		w.logger = log.New(os.Stderr, "", log.LstdFlags)
