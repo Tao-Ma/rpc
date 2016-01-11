@@ -84,6 +84,7 @@ func NewTask(req_num uint64, conn_num uint64, burst_num uint64) *Task {
 
 func main() {
 	address := flag.String("address", ":10000", "benchmark server address")
+	router_per_conn := flag.Bool("router_per_conn", false, "benchmark share Router")
 	conn_num := flag.Uint64("conn_num", 1, "benchmark connection number")
 	req_num := flag.Uint64("req_num", 1000000, "benchmark request number")
 	burst_num := flag.Uint64("burst_num", 1, "benchmark burst number")
@@ -95,18 +96,32 @@ func main() {
 	hf := rpc.NewRPCHeaderFactory(rpc.NewProtobufFactory())
 	_ = hf
 
-	r, err := rpc.NewRouter(nil, nil)
-	if err != nil {
-		fmt.Println(err)
-		return
-	} else {
-		r.Run()
-		defer r.Stop()
+	// index 0 is not used
+	var routers []*rpc.Router
+
+	for i := 0; i <= task.conn_num; i++ {
+		var r *rpc.Router
+		var err error
+
+		if *router_per_conn || i == 0 {
+			r, err = rpc.NewRouter(nil, nil)
+		} else {
+			r, err = routers[0], nil
+		}
+		if err != nil {
+			fmt.Println(err)
+			return
+		} else {
+			r.Run()
+			defer r.Stop()
+		}
+
+		routers = append(routers, r)
 	}
 
 	ep_name := "benchmark-"
 	for i := 1; i <= task.conn_num; i++ {
-		if err := r.Dial(ep_name+strconv.Itoa(i), "tcp", *address, hf); err != nil {
+		if err := routers[i].Dial(ep_name+strconv.Itoa(i), "tcp", *address, hf); err != nil {
 			fmt.Println(err)
 			return
 		}
@@ -135,7 +150,7 @@ func main() {
 				burst_wg.Wait()
 			}
 			conn_wg.Done()
-		}(r, &conn_wg, task, conn_id)
+		}(routers[conn_id], &conn_wg, task, conn_id)
 	}
 	conn_wg.Wait()
 	stop := time.Now()
