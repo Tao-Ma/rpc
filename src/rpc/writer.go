@@ -232,7 +232,7 @@ func (w *Writer) allocBuf(rlen uint32) []byte {
 
 	aoff := w.b_alloc_offset
 	doff := w.b_data_offset
-	if doff >= w.maxlen {
+	if doff+len >= w.maxlen {
 		// rewind first
 		copy(w.b[0:aoff-doff], w.b[doff:aoff])
 		w.b_alloc_offset = aoff - doff
