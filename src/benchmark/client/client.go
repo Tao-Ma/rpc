@@ -7,18 +7,19 @@ import (
 	"fmt"
 	proto "github.com/golang/protobuf/proto"
 	"rpc"
+	"strconv"
 	"sync"
 	"time"
 )
 
 func ClientProcessReponseWaitGroup(p rpc.Payload, arg rpc.RPCCallback_arg, err error) {
-	tc := arg.(*TaskCall)
-	tc.arg.(*sync.WaitGroup).Done()
-	tc.stop = time.Now()
-
 	if err != nil {
 		panic("Error")
 	}
+
+	tc := arg.(*TaskCall)
+	tc.arg.(*sync.WaitGroup).Done()
+	tc.stop = time.Now()
 }
 
 type TaskCall struct {
@@ -53,6 +54,7 @@ func NewTask(req_num uint64, conn_num uint64, burst_num uint64) *Task {
 	t.task = make(map[int]map[int]map[uint64]*TaskCall)
 
 	per_conn_req_num := req_num / conn_num
+	burst_times := int(per_conn_req_num / burst_num)
 
 	conn_id := 0
 	burst_id := 0
@@ -66,7 +68,7 @@ func NewTask(req_num uint64, conn_num uint64, burst_num uint64) *Task {
 		}
 
 		// should advance burst_id
-		burst_id = int(id/burst_num) + 1
+		burst_id = int(id/burst_num)%burst_times + 1
 		if _, exist := t.task[conn_id][burst_id]; !exist {
 			t.task[conn_id][burst_id] = make(map[uint64]*TaskCall)
 		}
@@ -97,14 +99,17 @@ func main() {
 	if err != nil {
 		fmt.Println(err)
 		return
+	} else {
+		r.Run()
+		defer r.Stop()
 	}
 
-	r.Run()
-	defer r.Stop()
-
-	if err := r.Dial("benchmark", "tcp", *address, hf); err != nil {
-		fmt.Println(err)
-		return
+	ep_name := "benchmark-"
+	for i := 1; i <= task.conn_num; i++ {
+		if err := r.Dial(ep_name+strconv.Itoa(i), "tcp", *address, hf); err != nil {
+			fmt.Println(err)
+			return
+		}
 	}
 
 	var conn_wg sync.WaitGroup
@@ -114,6 +119,7 @@ func main() {
 		conn_wg.Add(1)
 		// connection
 		go func(r *rpc.Router, conn_wg *sync.WaitGroup, task *Task, conn_id int) {
+			name := ep_name + strconv.Itoa(conn_id)
 			conn_task := task.task[conn_id]
 			for burst_id := 1; burst_id <= len(conn_task); burst_id++ {
 				burst_task := conn_task[burst_id]
@@ -124,7 +130,7 @@ func main() {
 					req.Id = proto.Uint64(id)
 					burst_task[id].start = time.Now()
 					burst_task[id].arg = &burst_wg
-					r.Call("benchmark", "rpc", req, ClientProcessReponseWaitGroup, burst_task[id], 0)
+					r.Call(name, "rpc", req, ClientProcessReponseWaitGroup, burst_task[id], 0)
 				}
 				burst_wg.Wait()
 			}
