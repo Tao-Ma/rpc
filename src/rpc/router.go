@@ -804,6 +804,7 @@ func (r *Router) LoopProcessOperation(op *opReq) {
 		if r.ep_stop {
 			ret = ErrOPAddEndPointStopping
 		} else {
+			r.stats.epIn++
 			ret = r.addEndPoint(ep)
 			ep.Run()
 		}
@@ -811,6 +812,7 @@ func (r *Router) LoopProcessOperation(op *opReq) {
 		if ep, err := r.delEndPoint(op.n); err != nil {
 			ret = err
 		} else {
+			r.stats.epOut++
 			ret = ep
 		}
 	case RouterOPAddListener:
@@ -842,6 +844,7 @@ func (r *Router) LoopProcessOperation(op *opReq) {
 		ret = ErrOPEndPointNotExist
 		for k := range r.nmap {
 			ret, _ = r.delEndPoint(k)
+			r.stats.epOut++
 			break
 		}
 	}
