@@ -88,10 +88,13 @@ func NewWriter(conn io.WriteCloser, io IOChannel, mb MsgBuffer, logger *log.Logg
 	w.maxlen = 128 * 1024
 	w.b = make([]byte, w.maxlen*2)
 	w.ob = w.b
-	w.timeout = 10 * time.Microsecond
-	w.ticker = time.NewTicker(w.timeout)
 
 	w.buffered = true
+
+	if w.buffered {
+		w.timeout = 10 * time.Microsecond
+		w.ticker = time.NewTicker(w.timeout)
+	}
 
 	if logger == nil {
 		w.logger = log.New(os.Stderr, "", log.LstdFlags)
@@ -107,7 +110,9 @@ func (w *Writer) Run() {
 }
 
 func (w *Writer) Stop() {
-	w.ticker.Stop()
+	if w.ticker != nil {
+		w.ticker.Stop()
+	}
 	w.bg.Stop()
 	//w.logger.Printf("write bytes: %v write times: %v\n", w.stats.Bytes, w.stats.Times)
 }
