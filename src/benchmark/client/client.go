@@ -18,7 +18,7 @@ func ClientProcessReponseWaitGroup(p rpc.Payload, arg rpc.RPCCallback_arg, err e
 	}
 
 	tc := arg.(*TaskCall)
-	tc.arg.(*sync.WaitGroup).Done()
+	tc.arg.(chan struct{}) <- struct{}{}
 	tc.stop = time.Now()
 }
 
@@ -33,17 +33,15 @@ type Task struct {
 	// conn/burst/id
 	conn_num  int
 	burst_num int
-	task      map[int]map[int]map[uint64]*TaskCall
+	task      map[int]map[uint64]*TaskCall
 }
 
 func (t *Task) Do(c *benchmark.Collector) {
 	for _, conn_task := range t.task {
-		for _, burst_task := range conn_task {
-			for _, tc := range burst_task {
-				d := tc.stop.Sub(tc.start)
-				// us(MicroSecond) uint
-				c.Add(uint64(d) / uint64(1000))
-			}
+		for _, tc := range conn_task {
+			d := tc.stop.Sub(tc.start)
+			// us(MicroSecond) uint
+			c.Add(uint64(d) / uint64(1000))
 		}
 	}
 }
@@ -51,29 +49,20 @@ func (t *Task) Do(c *benchmark.Collector) {
 func NewTask(req_num uint64, conn_num uint64, burst_num uint64) *Task {
 	t := new(Task)
 
-	t.task = make(map[int]map[int]map[uint64]*TaskCall)
+	t.task = make(map[int]map[uint64]*TaskCall)
 
 	per_conn_req_num := req_num / conn_num
-	burst_times := int(per_conn_req_num / burst_num)
 
 	conn_id := 0
-	burst_id := 0
 
 	for id := uint64(0); id < req_num; id++ {
 		// should advance conn_id
 		conn_id = int(id/per_conn_req_num) + 1
 		if _, exist := t.task[conn_id]; !exist {
-			t.task[conn_id] = make(map[int]map[uint64]*TaskCall)
-			burst_id = 0
+			t.task[conn_id] = make(map[uint64]*TaskCall)
 		}
 
-		// should advance burst_id
-		burst_id = int(id/burst_num)%burst_times + 1
-		if _, exist := t.task[conn_id][burst_id]; !exist {
-			t.task[conn_id][burst_id] = make(map[uint64]*TaskCall)
-		}
-
-		t.task[conn_id][burst_id][id] = new(TaskCall)
+		t.task[conn_id][id] = new(TaskCall)
 	}
 
 	t.conn_num = conn_id
@@ -136,19 +125,25 @@ func main() {
 		go func(r *rpc.Router, conn_wg *sync.WaitGroup, task *Task, conn_id int) {
 			name := ep_name + strconv.Itoa(conn_id)
 			conn_task := task.task[conn_id]
-			for burst_id := 1; burst_id <= len(conn_task); burst_id++ {
-				burst_task := conn_task[burst_id]
-				var burst_wg sync.WaitGroup
-				for id, _ := range burst_task {
-					burst_wg.Add(1)
-					req := testpb.NewTestReq()
-					req.Id = proto.Uint64(id)
-					burst_task[id].start = time.Now()
-					burst_task[id].arg = &burst_wg
-					r.Call(name, "rpc", req, ClientProcessReponseWaitGroup, burst_task[id], 0)
-				}
-				burst_wg.Wait()
+
+			ch := make(chan struct{}, task.burst_num)
+			for i := 0; i < task.burst_num; i++ {
+				ch <- struct{}{}
 			}
+
+			for id, _ := range conn_task {
+				<-ch
+				req := testpb.NewTestReq()
+				req.Id = proto.Uint64(id)
+
+				conn_task[id].start = time.Now()
+				conn_task[id].arg = ch
+				r.Call(name, "rpc", req, ClientProcessReponseWaitGroup, conn_task[id], 0)
+			}
+			for i := 0; i < task.burst_num; i++ {
+				<-ch
+			}
+			close(ch)
 			conn_wg.Done()
 		}(routers[conn_id], &conn_wg, task, conn_id)
 	}
