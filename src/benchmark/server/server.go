@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/signal"
 	"rpc"
+	"runtime/pprof"
 	"syscall"
 )
 
@@ -29,13 +30,25 @@ func ServiceProcessPayload(r *rpc.Router, name string, p rpc.Payload) rpc.Payloa
 		panic("ServiceProcessPayload receieve wrong info")
 	}
 }
-func main() {
-	address := flag.String("address", ":10000", "benchmark server address")
 
+var cpuprofile = flag.String("cpuprofile", "", "write cpu profile to file")
+var address = flag.String("address", ":10000", "benchmark server address")
+
+func main() {
 	flag.Parse()
 
+	// profiling
+	if *cpuprofile != "" {
+		f, err := os.Create(*cpuprofile)
+		if err != nil {
+			return
+		}
+		pprof.StartCPUProfile(f)
+		defer pprof.StopCPUProfile()
+	}
+
+	// protocol
 	hf := rpc.NewRPCHeaderFactory(rpc.NewProtobufFactory())
-	_ = hf
 
 	r, err := rpc.NewRouter(nil, ServiceProcessPayload)
 	if err != nil {

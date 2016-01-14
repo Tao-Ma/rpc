@@ -6,7 +6,9 @@ import (
 	"flag"
 	"fmt"
 	proto "github.com/golang/protobuf/proto"
+	"os"
 	"rpc"
+	"runtime/pprof"
 	"strconv"
 	"sync"
 	"time"
@@ -71,14 +73,25 @@ func NewTask(req_num uint64, conn_num uint64, burst_num uint64) *Task {
 	return t
 }
 
-func main() {
-	address := flag.String("address", ":10000", "benchmark server address")
-	router_per_conn := flag.Bool("router_per_conn", false, "benchmark share Router")
-	conn_num := flag.Uint64("conn_num", 1, "benchmark connection number")
-	req_num := flag.Uint64("req_num", 1000000, "benchmark request number")
-	burst_num := flag.Uint64("burst_num", 1, "benchmark burst number")
+var address = flag.String("address", ":10000", "benchmark server address")
+var router_per_conn = flag.Bool("router_per_conn", false, "benchmark share Router")
+var conn_num = flag.Uint64("conn_num", 1, "benchmark connection number")
+var req_num = flag.Uint64("req_num", 1000000, "benchmark request number")
+var burst_num = flag.Uint64("burst_num", 1, "benchmark burst number")
+var cpuprofile = flag.String("cpuprofile", "", "write cpu profile to file")
 
+func main() {
 	flag.Parse()
+
+	// profiling
+	if *cpuprofile != "" {
+		f, err := os.Create(*cpuprofile)
+		if err != nil {
+			return
+		}
+		pprof.StartCPUProfile(f)
+		defer pprof.StopCPUProfile()
+	}
 
 	task := NewTask(*req_num, *conn_num, *burst_num)
 
