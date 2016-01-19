@@ -166,7 +166,7 @@ func main() {
 	total_time := stop.Sub(start)
 	qps := float64(*req_num*1000*1000*1000) / float64(total_time)
 
-	fmt.Printf("total time: %v total request: %v qps: %.2v\n",
+	fmt.Printf("total time: %v total request: %v qps: %.2f\n",
 		total_time, *req_num, qps)
 
 	c := benchmark.NewCollecter(1000 * 1000)
@@ -174,7 +174,7 @@ func main() {
 
 	fmt.Printf("max: %vus ", c.Max())
 	fmt.Printf("min: %vus ", c.Min())
-	fmt.Printf("avg: %.2vus ", c.Mean())
+	fmt.Printf("avg: %.2fus ", c.Mean())
 	fmt.Println()
 
 	a := []float64{50.0, 70.0, 90.0, 95.0, 99.0}
