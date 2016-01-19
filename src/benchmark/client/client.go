@@ -166,16 +166,24 @@ func main() {
 	total_time := stop.Sub(start)
 	qps := float64(*req_num*1000*1000*1000) / float64(total_time)
 
-	fmt.Printf("total time: %v total request: %v qps: %v\n",
+	fmt.Printf("total time: %v total request: %v qps: %.2v\n",
 		total_time, *req_num, qps)
 
 	c := benchmark.NewCollecter(1000 * 1000)
 	task.Do(c)
 
-	fmt.Printf("max: %vus\n", c.Max())
-	fmt.Printf("min: %vus\n", c.Min())
-	fmt.Printf("mean: %vus\n", c.Mean())
-	for _, p := range []float64{50.0, 70.0, 90.0, 95.0, 99.0} {
-		fmt.Printf("%.1f%% request done: %vus\n", p, c.Percentile(p))
+	fmt.Printf("max: %vus ", c.Max())
+	fmt.Printf("min: %vus ", c.Min())
+	fmt.Printf("avg: %.2vus ", c.Mean())
+	fmt.Println()
+
+	a := []float64{50.0, 70.0, 90.0, 95.0, 99.0}
+	for _, p := range a {
+		fmt.Printf("%7.1f%% ", p)
 	}
+	fmt.Println()
+	for _, p := range a {
+		fmt.Printf("%6dus ", c.Percentile(p))
+	}
+	fmt.Println()
 }
