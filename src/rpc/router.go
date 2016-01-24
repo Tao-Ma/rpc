@@ -196,7 +196,9 @@ func (r *Router) Unwrap(p RoutePayload) Payload {
 }
 
 func (ep *EndPoint) write(p RoutePayload) error {
-	return ep.w.Write(p.(Payload))
+	ep.w.Unflush()
+	err := ep.w.Write(p.(Payload))
+	return err
 }
 
 type routeMsg struct {
@@ -608,7 +610,7 @@ stopEndPoint:
 	close(r.in)
 	close(r.out)
 
-	r.logger.Printf("%v\n", &r.stats)
+	// r.logger.Printf("%v\n", &r.stats)
 }
 
 func (r *Router) call(ep string, rpc string, p Payload, cb RPCCallback_func, arg RPCCallback_arg, to time.Time) {

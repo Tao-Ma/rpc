@@ -32,3 +32,15 @@ ___
 - Protocol: Http 2.0
 - Compatibility: grpc api
 - Compatibility: grpc stream
+
+Benchmark
+---
+grpc:
+stream	requests	avg time
+1		147035		66.52
+2		259814		75.79
+3		386114		76.67
+4		410275		96.42
+6		472222		125.89
+8		480160		165.33 (*) <- rpc(buffered) faster from here
+

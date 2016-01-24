@@ -56,10 +56,10 @@ type Writer struct {
 	ob             []byte // always ref to w.b
 	b_alloc_offset int
 	b_data_offset  int
-	buffered       bool
 	tch            <-chan time.Time
 	timeout        time.Duration
-	ticker         *time.Ticker
+
+	flush chan struct{}
 
 	// inprogress state
 	inprogress_p Payload
@@ -89,12 +89,9 @@ func NewWriter(conn io.WriteCloser, io IOChannel, mb MsgBuffer, logger *log.Logg
 	w.b = make([]byte, w.maxlen*2)
 	w.ob = w.b
 
-	w.buffered = true
+	w.SetFlushTimeout(10)
 
-	if w.buffered {
-		w.timeout = 10 * time.Microsecond
-		w.ticker = time.NewTicker(w.timeout)
-	}
+	w.flush = make(chan struct{}, 1)
 
 	if logger == nil {
 		w.logger = log.New(os.Stderr, "", log.LstdFlags)
@@ -110,9 +107,6 @@ func (w *Writer) Run() {
 }
 
 func (w *Writer) Stop() {
-	if w.ticker != nil {
-		w.ticker.Stop()
-	}
 	w.bg.Stop()
 	//w.logger.Printf("write bytes: %v write times: %v\n", w.stats.Bytes, w.stats.Times)
 }
@@ -127,7 +121,7 @@ func (w *Writer) ShouldFlush() bool {
 	doff := w.b_data_offset
 	len := aoff - doff
 
-	return len >= w.maxlen || doff >= w.maxlen || !w.buffered
+	return len >= w.maxlen || doff >= w.maxlen
 }
 
 func (w *Writer) jitBuf() bool {
@@ -171,6 +165,10 @@ func (w *Writer) LoopOnce(q chan struct{}) error {
 			// timeout
 			w.tch = nil
 			force = true
+
+		case <-w.flush:
+			force = true
+
 		case p := <-w.io.Out():
 			if p == nil {
 				return errQuit
@@ -180,18 +178,10 @@ func (w *Writer) LoopOnce(q chan struct{}) error {
 			}
 
 			// If there is no timer, add one.
-			if w.buffered && w.tch == nil {
-				//w.tch = time.After(w.timeout)
-				w.tch = w.ticker.C
-			now:
-				for {
-					select {
-					case <-w.tch:
-					default:
-						break now
-					}
-				}
+			if w.tch == nil && w.timeout > 0 {
+				w.tch = time.After(w.timeout)
 			}
+			w.Flush()
 
 			if !w.ShouldFlush() {
 				continue
@@ -216,7 +206,32 @@ func (w *Writer) Loop(q chan struct{}) {
 }
 
 func (w *Writer) Cleanup() {
+	close(w.flush)
 	w.rm.Close()
+}
+
+func (w *Writer) Unflush() {
+	if w.timeout > 0 {
+		return
+	}
+	select {
+	case <-w.flush:
+	default:
+	}
+}
+
+func (w *Writer) SetFlushTimeout(to int) {
+	w.timeout = time.Duration(to) * time.Microsecond
+}
+
+func (w *Writer) Flush() {
+	if w.timeout > 0 {
+		return
+	}
+	select {
+	case w.flush <- struct{}{}:
+	default:
+	}
 }
 
 func (w *Writer) Write(p Payload) error {
