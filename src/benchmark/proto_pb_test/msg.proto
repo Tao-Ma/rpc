@@ -1,3 +1,4 @@
+syntax = "proto2";
 package proto_pb_test;
 
 message TestReq {
@@ -6,4 +7,9 @@ message TestReq {
 
 message TestRep {
 	required uint64 id = 1;
+}
+
+service TestService {
+	rpc TestCall(TestReq) returns (TestRep);
+	rpc TestStream(stream TestReq) returns (stream TestRep);
 }

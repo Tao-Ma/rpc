@@ -15,12 +15,15 @@ import (
 )
 
 func ClientProcessReponseWaitGroup(p rpc.Payload, arg rpc.RPCCallback_arg, err error) {
-	if err != nil {
-		panic("Error")
-	}
-
 	tc := arg.(*TaskCall)
 	tc.arg.(chan struct{}) <- struct{}{}
+
+	if err != nil {
+		tc.timeout = true
+		fmt.Printf("%v\n", err)
+		return
+	}
+
 	tc.stop = time.Now()
 }
 
@@ -28,7 +31,8 @@ type TaskCall struct {
 	start time.Time
 	stop  time.Time
 
-	arg interface{}
+	arg     interface{}
+	timeout bool
 }
 
 type Task struct {
@@ -41,6 +45,11 @@ type Task struct {
 func (t *Task) Do(c *benchmark.Collector) {
 	for _, conn_task := range t.task {
 		for _, tc := range conn_task {
+			if tc.timeout {
+				// TODO: timeout
+				continue
+			}
+
 			d := tc.stop.Sub(tc.start)
 			// us(MicroSecond) uint
 			c.Add(uint64(d) / uint64(1000))
@@ -151,7 +160,7 @@ func main() {
 
 				conn_task[id].start = time.Now()
 				conn_task[id].arg = ch
-				r.Call(name, "rpc", req, ClientProcessReponseWaitGroup, conn_task[id], 0)
+				r.Call(name, "rpc", req, ClientProcessReponseWaitGroup, conn_task[id], 1)
 			}
 			for i := 0; i < task.burst_num; i++ {
 				<-ch

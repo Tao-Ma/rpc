@@ -32,7 +32,7 @@ func ServiceProcessPayload(r *rpc.Router, name string, p rpc.Payload) rpc.Payloa
 }
 
 var cpuprofile = flag.String("cpuprofile", "", "write cpu profile to file")
-var address = flag.String("address", ":10000", "benchmark server address")
+var address = flag.String("address", "127.0.0.1:10000", "benchmark server address")
 
 func main() {
 	flag.Parse()
