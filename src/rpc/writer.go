@@ -283,6 +283,11 @@ func (w *Writer) Marshal(p Payload) error {
 		return err
 	}
 
+	// TODO: zero length payload
+	if len(npb) == 0 {
+		panic("don't support zero length payload")
+	}
+
 	if err := w.mb.MarshalHeader(hb, p, uint32(len(npb))); err != nil {
 		return err
 	}

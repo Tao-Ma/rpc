@@ -15,7 +15,7 @@ import (
 func ServiceProcessPayload(r *rpc.Router, name string, p rpc.Payload) rpc.Payload {
 	if req, ok := p.(*testpb.TestReq); ok {
 		rep := testpb.NewTestRep()
-		rep.Id = proto.Uint64(req.GetId())
+		rep.Id = req.Id
 		return rep
 	} else if b, ok := p.([]byte); ok {
 
@@ -24,7 +24,7 @@ func ServiceProcessPayload(r *rpc.Router, name string, p rpc.Payload) rpc.Payloa
 			panic("proto.Unmarshal error")
 		}
 		rep := testpb.NewTestRep()
-		rep.Id = proto.Uint64(req.GetId())
+		rep.Id = req.Id
 		return rep
 	} else {
 		panic("ServiceProcessPayload receieve wrong info")

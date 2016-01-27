@@ -5,7 +5,6 @@ import (
 	testpb "benchmark/proto_pb_test"
 	"flag"
 	"fmt"
-	proto "github.com/golang/protobuf/proto"
 	"os"
 	"rpc"
 	"runtime/pprof"
@@ -19,8 +18,8 @@ func ClientProcessReponseWaitGroup(p rpc.Payload, arg rpc.RPCCallback_arg, err e
 	tc.arg.(chan struct{}) <- struct{}{}
 
 	if err != nil {
-		tc.timeout = true
-		fmt.Printf("%v\n", err)
+		tc.err = true
+		//fmt.Printf("%v\n", err)
 		return
 	}
 
@@ -31,8 +30,8 @@ type TaskCall struct {
 	start time.Time
 	stop  time.Time
 
-	arg     interface{}
-	timeout bool
+	arg interface{}
+	err bool
 }
 
 type Task struct {
@@ -45,8 +44,8 @@ type Task struct {
 func (t *Task) Do(c *benchmark.Collector) {
 	for _, conn_task := range t.task {
 		for _, tc := range conn_task {
-			if tc.timeout {
-				// TODO: timeout
+			if tc.err {
+				// TODO: err
 				continue
 			}
 
@@ -73,7 +72,7 @@ func NewTask(req_num uint64, conn_num uint64, burst_num uint64) *Task {
 			t.task[conn_id] = make(map[uint64]*TaskCall)
 		}
 
-		t.task[conn_id][id] = new(TaskCall)
+		t.task[conn_id][id+1] = new(TaskCall)
 	}
 
 	t.conn_num = conn_id
@@ -156,7 +155,7 @@ func main() {
 			for id, _ := range conn_task {
 				<-ch
 				req := testpb.NewTestReq()
-				req.Id = proto.Uint64(id)
+				req.Id = id
 
 				conn_task[id].start = time.Now()
 				conn_task[id].arg = ch

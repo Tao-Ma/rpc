@@ -1,12 +1,12 @@
-syntax = "proto2";
+syntax = "proto3";
 package proto_pb_test;
 
 message TestReq {
-	required uint64 id = 1;
+	uint64 id = 1;
 }
 
 message TestRep {
-	required uint64 id = 1;
+	uint64 id = 1;
 }
 
 service TestService {
