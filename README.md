@@ -1,6 +1,6 @@
 # rpc
 
-This is a simple rpc framework.
+This is a simple rpc framework. It is my first GO project.
 
 Architecture
 ___
@@ -33,14 +33,19 @@ ___
 - Compatibility: grpc api
 - Compatibility: grpc stream
 
-Benchmark
+Performance
 ---
-grpc:
-stream	requests	avg time
-1		147035		66.52
-2		259814		75.79
-3		386114		76.67
-4		410275		96.42
-6		472222		125.89
-8		480160		165.33 (*) <- rpc(buffered) faster from here
+Very fast and the throughput are quite high. On my 2014 Mid rmbp 15, more
+than 200k qps(latency < 50ms) with 8 connections 500 concurrent request.
 
+14+k qps(avg latency < 70us) with 1 concurrent request.
+31+k qps(avg latency < 65us) with 2 concurrent request.
+41+k qps(avg latency < 75us) with 3 concurrent request.
+47+k qps(avg latency < 85us) with 4 concurrent request.
+54+k qps(avg latency < 110us) with 6 concurrent request.
+60+k qps(avg latency < 140us) with 8 concurrent request.
+120+k qps(avg latency < 1ms) with 100 concurrent request.
+120+k qps(avg latency < 5ms) with 500 concurrent request.
+
+Performance are a little better than grpc(grpc support more features, I hope
+I can run faster when I support all of such features).
