@@ -3,7 +3,9 @@
 default_go_workspace=`pwd`
 
 go_lib_deps='github.com/golang/protobuf/proto
-github.com/golang/protobuf/protoc-gen-go'
+github.com/golang/protobuf/protoc-gen-go
+golang.org/x/net/context
+google.golang.org/grpc'
 
 bin_deps='protoc
 go

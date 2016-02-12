@@ -34,7 +34,7 @@ if [ -z "$pkgname" ]; then
 fi
 
 echo "generate new protobuf file..."
-protoc --go_out="." "$protofile"  || exit $?
+protoc --go_out=plugins=grpc:"." "$protofile"  || exit $?
 
 names=`grep message "$protofile" | awk '{print $2}' | grep -E -v '^[[:blank:]]*$'`
 
